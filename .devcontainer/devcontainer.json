@@ -12,7 +12,9 @@
             "extensions": [
                 "ms-vscode.cpptools",
                 "augment.vscode-augment",
-                "pomdtr.excalidraw-editor"
+                "pomdtr.excalidraw-editor",
+                "anthropic.claude-code",
+                "openai.chatgpt"
             ]
         }
     }
