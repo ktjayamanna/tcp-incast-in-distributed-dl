@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <cctype>
 
 namespace sim::cpu_fifo::trace_csv
 {
@@ -24,6 +25,23 @@ namespace sim::cpu_fifo::trace_csv
             "priority_tag",
         };
 
+        std::string trim_ascii_whitespace(std::string value)
+        {
+            std::size_t start = 0;
+            while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start])) != 0)
+            {
+                ++start;
+            }
+
+            std::size_t end = value.size();
+            while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0)
+            {
+                --end;
+            }
+
+            return value.substr(start, end - start);
+        }
+
         std::vector<std::string> split_line(const std::string &line, char delimiter)
         {
             std::vector<std::string> cells;
@@ -31,7 +49,7 @@ namespace sim::cpu_fifo::trace_csv
             std::string cell;
             while (std::getline(stream, cell, delimiter))
             {
-                cells.push_back(cell);
+                cells.push_back(trim_ascii_whitespace(cell));
             }
             return cells;
         }
