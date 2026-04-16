@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "types.hpp"
+#include "packet_source.hpp"
 
 namespace sim::cpu_fifo::trace_csv
 {
@@ -26,5 +26,20 @@ namespace sim::cpu_fifo::trace_csv
     TraceReadResult read_trace_csv(
         const std::string &path,
         const TraceReadOptions &options = {});
+
+    class CsvPacketSource final : public PacketSource
+    {
+    public:
+        explicit CsvPacketSource(
+            std::string path,
+            TraceReadOptions options = {});
+
+        bool has_next() const override;
+        Packet next() override;
+
+    private:
+        TraceReadResult trace_;
+        std::size_t cursor_ = 0;
+    };
 
 } // namespace sim::cpu_fifo::trace_csv

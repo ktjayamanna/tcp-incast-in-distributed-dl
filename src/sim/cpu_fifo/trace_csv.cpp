@@ -143,15 +143,17 @@ namespace sim::cpu_fifo::trace_csv
             }
 
             Packet packet{};
-            packet.packet_start_us = parse_i64(cells[0], "packet_start_us", line_no);
-            packet.wave_id = static_cast<std::uint32_t>(parse_u64(cells[1], "wave_id", line_no));
-            packet.sender_id = static_cast<std::uint32_t>(parse_u64(cells[2], "sender_id", line_no));
-            packet.packet_index_for_sender = static_cast<std::uint32_t>(
-                parse_u64(cells[3], "packet_index_for_sender", line_no));
+            packet.arrival_time_us = parse_i64(cells[0], "packet_start_us", line_no);
             packet.packet_size_bytes = static_cast<std::uint32_t>(
                 parse_u64(cells[4], "packet_size_bytes", line_no));
             packet.traffic_class = parse_traffic_class(cells[5], line_no);
             packet.priority_tag = static_cast<std::uint8_t>(parse_u64(cells[6], "priority_tag", line_no));
+            SyntheticPacketMetadata synthetic_metadata{};
+            synthetic_metadata.wave_id = static_cast<std::uint32_t>(parse_u64(cells[1], "wave_id", line_no));
+            synthetic_metadata.sender_id = static_cast<std::uint32_t>(parse_u64(cells[2], "sender_id", line_no));
+            synthetic_metadata.packet_index_for_sender = static_cast<std::uint32_t>(
+                parse_u64(cells[3], "packet_index_for_sender", line_no));
+            packet.synthetic_metadata = synthetic_metadata;
 
             return packet;
         }
@@ -196,21 +198,40 @@ namespace sim::cpu_fifo::trace_csv
 
             Packet packet = parse_packet_row(cells, line_no);
             if (options.enforce_sorted_timestamps && has_previous &&
-                packet.packet_start_us < previous_ts)
+                packet.arrival_time_us < previous_ts)
             {
                 throw std::runtime_error(
                     "packet_start_us is not non-decreasing at line " + std::to_string(line_no) +
                     ". Previous=" + std::to_string(previous_ts) +
-                    ", current=" + std::to_string(packet.packet_start_us));
+                    ", current=" + std::to_string(packet.arrival_time_us));
             }
 
             result.packets.push_back(packet);
             ++result.row_count;
-            previous_ts = packet.packet_start_us;
+            previous_ts = packet.arrival_time_us;
             has_previous = true;
         }
 
         return result;
+    }
+
+    CsvPacketSource::CsvPacketSource(std::string path, TraceReadOptions options)
+        : trace_(read_trace_csv(path, options))
+    {
+    }
+
+    bool CsvPacketSource::has_next() const
+    {
+        return cursor_ < trace_.packets.size();
+    }
+
+    Packet CsvPacketSource::next()
+    {
+        if (!has_next())
+        {
+            throw std::runtime_error("CsvPacketSource::next called with no packets remaining");
+        }
+        return trace_.packets[cursor_++];
     }
 
 } // namespace sim::cpu_fifo::trace_csv

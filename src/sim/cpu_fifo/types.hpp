@@ -1,6 +1,7 @@
 #pragma once // Prevents multiple inclusions of the same header file. Modern version of #ifndef/#define/#endif
 
 #include <cstdint> // fixed-width integer types with guaranteed sizes.
+#include <optional>
 #include <vector>
 
 namespace sim::cpu_fifo
@@ -12,15 +13,20 @@ namespace sim::cpu_fifo
         Control = 1,
     };
 
-    struct Packet
+    struct SyntheticPacketMetadata
     {
-        std::int64_t packet_start_us = 0;
         std::uint32_t wave_id = 0;
         std::uint32_t sender_id = 0;
         std::uint32_t packet_index_for_sender = 0;
+    };
+
+    struct Packet
+    {
+        std::int64_t arrival_time_us = 0;
         std::uint32_t packet_size_bytes = 0;
         TrafficClass traffic_class = TrafficClass::Bulk;
         std::uint8_t priority_tag = 0;
+        std::optional<SyntheticPacketMetadata> synthetic_metadata;
     };
 
     struct SimStats
