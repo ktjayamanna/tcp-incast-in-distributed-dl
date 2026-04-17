@@ -20,82 +20,68 @@ class TrafficConfig:
 
 
 class ScenarioName(Enum):
-    NORMAL_TRAFFIC = "normal_traffic"
-    HIGH_CONGESTION = "high_congestion"
-    CONGESTION_AVOIDANCE = "congestion_avoidance"
-    DATACENTER_SCALE = "datacenter_scale"
-
-def normal_traffic() -> TrafficConfig:
-    return TrafficConfig(
-        senders_per_wave=32,
-        number_of_waves=100,
-        first_wave_start_us=0,
-        wave_interval_us=5_000,
-        max_start_offset_us=50,
-        seed=7,
-        bytes_per_sender_per_wave=128 * 1024,
-        packet_size_bytes=1_500,
-        control_packet_every_n=20,
-    )
+    LOW    = "low"
+    MEDIUM = "medium"
+    HIGH   = "high"
 
 
-def high_congestion() -> TrafficConfig:
+def low() -> TrafficConfig:
+    """128 senders — small network segment. GPU loses badly to CPU sort."""
     return TrafficConfig(
         senders_per_wave=128,
-        number_of_waves=150,
+        number_of_waves=10,
         first_wave_start_us=0,
         wave_interval_us=2_000,
         max_start_offset_us=20,
-        seed=11,
-        bytes_per_sender_per_wave=512 * 1024,
+        seed=1,
+        bytes_per_sender_per_wave=1_500,
         packet_size_bytes=1_500,
         control_packet_every_n=25,
     )
 
 
-def congestion_avoidance() -> TrafficConfig:
+def medium() -> TrafficConfig:
+    """5 000 senders — rack aggregation. GPU approaches CPU sort performance."""
     return TrafficConfig(
-        senders_per_wave=64,
-        number_of_waves=120,
-        first_wave_start_us=0,
-        wave_interval_us=3_000,
-        max_start_offset_us=30,
-        seed=23,
-        bytes_per_sender_per_wave=256 * 1024,
-        packet_size_bytes=1_500,
-        control_packet_every_n=20,
-    )
-
-
-def datacenter_scale() -> TrafficConfig:
-    return TrafficConfig(
-        senders_per_wave=10_000,
-        number_of_waves=20,
+        senders_per_wave=5_000,
+        number_of_waves=10,
         first_wave_start_us=0,
         wave_interval_us=5_000,
         max_start_offset_us=20,
-        seed=42,
-        bytes_per_sender_per_wave=4_500,  # 3 packets per sender — fills ~30k-packet queue
+        seed=2,
+        bytes_per_sender_per_wave=3_000,
+        packet_size_bytes=1_500,
+        control_packet_every_n=25,
+    )
+
+
+def high() -> TrafficConfig:
+    """10 000 senders — core / datacenter switch. GPU wins decisively."""
+    return TrafficConfig(
+        senders_per_wave=10_000,
+        number_of_waves=10,
+        first_wave_start_us=0,
+        wave_interval_us=12_000,
+        max_start_offset_us=20,
+        seed=3,
+        bytes_per_sender_per_wave=4_500,
         packet_size_bytes=1_500,
         control_packet_every_n=25,
     )
 
 
 SCENARIOS = {
-    ScenarioName.NORMAL_TRAFFIC: normal_traffic,
-    ScenarioName.HIGH_CONGESTION: high_congestion,
-    ScenarioName.CONGESTION_AVOIDANCE: congestion_avoidance,
-    ScenarioName.DATACENTER_SCALE: datacenter_scale,
+    ScenarioName.LOW:    low,
+    ScenarioName.MEDIUM: medium,
+    ScenarioName.HIGH:   high,
 }
 
-# Per-scenario simulation buffer sizes (bytes).
-# datacenter_scale uses a 20 MB buffer so all 10k simultaneous packets
-# fit without drops, giving the GPU large batches to sort.
-SCENARIO_BUFFER_BYTES: dict[ScenarioName, int] = {
-    ScenarioName.NORMAL_TRAFFIC:    262_144,
-    ScenarioName.HIGH_CONGESTION:   262_144,
-    ScenarioName.CONGESTION_AVOIDANCE: 262_144,
-    ScenarioName.DATACENTER_SCALE:  52_428_800,  # 50 MB — fits ~35k packets simultaneously
+# Simulation buffer size per scenario (bytes).
+# Sized to hold one full wave without drops so the GPU sees maximum batch sizes.
+SCENARIO_BUFFER_BYTES = {
+    ScenarioName.LOW:    52_428_800,    # 50 MB — consistent across all scenarios
+    ScenarioName.MEDIUM: 52_428_800,
+    ScenarioName.HIGH:   52_428_800,
 }
 
 

@@ -6,7 +6,7 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-from traffic.config import normal_traffic
+from traffic.config import low as normal_traffic
 from traffic.generator import generate_traffic
 
 

@@ -5,7 +5,7 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-from traffic.config import high_congestion
+from traffic.config import high as high_congestion
 from traffic.generator import generate_traffic
 from traffic.validate import validate_timestamp_order
 

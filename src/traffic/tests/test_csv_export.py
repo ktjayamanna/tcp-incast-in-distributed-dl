@@ -8,16 +8,16 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-from traffic.config import ScenarioName, normal_traffic
+from traffic.config import ScenarioName, low
 from traffic.io.csv_export import TRACE_COLUMNS, generate_and_export_csv
 
 
 def test_generate_and_export_csv_writes_expected_header_and_rows(tmp_path: Path) -> None:
     """Expectation: export writes canonical columns and one row per generated event."""
-    config = normal_traffic()
+    config = low()
     output_path = generate_and_export_csv(
         config=config,
-        scenario_name=ScenarioName.NORMAL_TRAFFIC,
+        scenario_name=ScenarioName.LOW,
         output_dir=tmp_path,
     )
 
@@ -33,14 +33,14 @@ def test_generate_and_export_csv_writes_expected_header_and_rows(tmp_path: Path)
 
 def test_generate_and_export_csv_filename_contains_scenario_and_seed(tmp_path: Path) -> None:
     """Expectation: filename is deterministic and encodes scenario/config identity."""
-    config = normal_traffic()
+    config = low()
     output_path = generate_and_export_csv(
         config=config,
-        scenario_name=ScenarioName.NORMAL_TRAFFIC,
+        scenario_name=ScenarioName.LOW,
         output_dir=tmp_path,
     )
 
     filename = output_path.name
-    assert "normal_traffic" in filename
+    assert "low" in filename
     assert f"seed{config.seed}" in filename
     assert filename.endswith(".csv")
