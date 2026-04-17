@@ -1,3 +1,4 @@
 matplotlib
 numpy
 pytest
+ns3==3.44.post0

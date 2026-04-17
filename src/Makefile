@@ -27,7 +27,10 @@ GPU_PQ_SRCS      := sim/gpu_priority_queue/gpu_sorter.cu sim/gpu_priority_queue/
                     sim/gpu_priority_queue/main.cpp sim/cpu_fifo/trace_csv.cpp \
                     sim/cpu_fifo/socket_source.cpp
 
-.PHONY: install build run-all run-cpu-fifo-socket run-cpu-priority-queue-socket run-gpu-priority-queue-socket clean
+.PHONY: install build run-all \
+	run-cpu-fifo-socket run-cpu-priority-queue-socket run-gpu-priority-queue-socket \
+	run-cpu-fifo-ns3 run-cpu-priority-queue-ns3 run-gpu-priority-queue-ns3 \
+	clean
 
 install:
 	$(PYTHON) -m pip install -e .[dev]
@@ -82,6 +85,24 @@ run-cpu-priority-queue-socket: $(CPU_PQ_BIN)
 
 run-gpu-priority-queue-socket: $(GPU_PQ_BIN)
 	$(GPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
+
+run-cpu-fifo-ns3: $(CPU_FIFO_BIN)
+	$(CPU_FIFO_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) & \
+	sleep 0.5 && PYTHONPATH=. $(PYTHON) -m traffic.ns3_incast \
+	  --scenario $(SCENARIO) --port $(SOCKET_PORT) \
+	  --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
+
+run-cpu-priority-queue-ns3: $(CPU_PQ_BIN)
+	$(CPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) & \
+	sleep 0.5 && PYTHONPATH=. $(PYTHON) -m traffic.ns3_incast \
+	  --scenario $(SCENARIO) --port $(SOCKET_PORT) \
+	  --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
+
+run-gpu-priority-queue-ns3: $(GPU_PQ_BIN)
+	$(GPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) & \
+	sleep 0.5 && PYTHONPATH=. $(PYTHON) -m traffic.ns3_incast \
+	  --scenario $(SCENARIO) --port $(SOCKET_PORT) \
+	  --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
 
 run-all: build
 	PYTHONPATH=. SCENARIO=$(SCENARIO) LINK_BPS=$(LINK_BPS) BUFFER_BYTES=$(BUFFER_BYTES) \
