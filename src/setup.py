@@ -13,6 +13,7 @@ setup(
     install_requires=[
         "numpy",
         "matplotlib",
+        "openpyxl",
     ],
     python_requires=">=3.8",
 )

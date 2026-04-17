@@ -1,6 +1,7 @@
 #include "gpu_sorter.cuh"
 
 #include <cuda_runtime.h>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -99,13 +100,26 @@ GpuSorter::~GpuSorter()
 void GpuSorter::sort(
     const std::uint64_t* sort_keys,
     std::uint32_t*       out_indices,
-    int                  n)
+    int                  n,
+    SortTiming*          timing)
 {
     if (n <= 0) return;
 
     const int m = next_power_of_two(n); // bitonic sort requires power-of-2 size
     if (m > padded_capacity_)
         throw std::runtime_error("GpuSorter: batch size exceeds allocated capacity");
+
+    // Wall-clock start (covers everything including CUDA API overhead).
+    const auto wall_start = std::chrono::steady_clock::now();
+
+    // CUDA events for per-phase GPU timing.
+    cudaEvent_t ev_h2d_start, ev_h2d_end, ev_kern_start, ev_kern_end, ev_d2h_start, ev_d2h_end;
+    if (timing)
+    {
+        cudaEventCreate(&ev_h2d_start);  cudaEventCreate(&ev_h2d_end);
+        cudaEventCreate(&ev_kern_start); cudaEventCreate(&ev_kern_end);
+        cudaEventCreate(&ev_d2h_start);  cudaEventCreate(&ev_d2h_end);
+    }
 
     // Fill pinned staging buffer: real keys first, then sentinel padding.
     // Sentinel UINT64_MAX ensures padding slots sort to the back and are ignored.
@@ -121,12 +135,14 @@ void GpuSorter::sort(
     }
 
     // H2D transfer (pinned memory enables optimal DMA bandwidth)
+    if (timing) cudaEventRecord(ev_h2d_start);
     cuda_check(
         cudaMemcpy(d_keys_,    h_keys_,    m * sizeof(std::uint64_t), cudaMemcpyHostToDevice),
         "H2D keys");
     cuda_check(
         cudaMemcpy(d_indices_, h_indices_, m * sizeof(std::uint32_t), cudaMemcpyHostToDevice),
         "H2D indices");
+    if (timing) cudaEventRecord(ev_h2d_end);
 
     // Parallel bitonic sort: O(log^2 m) kernel launches, each with m threads.
     // Outer loop k doubles each iteration (merge stage size).
@@ -134,20 +150,40 @@ void GpuSorter::sort(
     constexpr int kBlockSize = 256;
     const int     num_blocks = (m + kBlockSize - 1) / kBlockSize;
 
+    if (timing) cudaEventRecord(ev_kern_start);
     for (int k = 2; k <= m; k <<= 1)
     {
         for (int j = k >> 1; j > 0; j >>= 1)
             bitonic_step<<<num_blocks, kBlockSize>>>(d_keys_, d_indices_, j, k, m);
     }
+    if (timing) cudaEventRecord(ev_kern_end);
     cuda_check(cudaDeviceSynchronize(), "bitonic sort sync");
 
     // D2H: copy only the first n indices (padding slots stay on device)
+    if (timing) cudaEventRecord(ev_d2h_start);
     cuda_check(
         cudaMemcpy(h_indices_, d_indices_, n * sizeof(std::uint32_t), cudaMemcpyDeviceToHost),
         "D2H indices");
+    if (timing) cudaEventRecord(ev_d2h_end);
 
     for (int i = 0; i < n; i++)
         out_indices[i] = h_indices_[i];
+
+    if (timing)
+    {
+        cudaEventSynchronize(ev_d2h_end);
+        cudaEventElapsedTime(&timing->h2d_ms,    ev_h2d_start,  ev_h2d_end);
+        cudaEventElapsedTime(&timing->kernel_ms, ev_kern_start, ev_kern_end);
+        cudaEventElapsedTime(&timing->d2h_ms,    ev_d2h_start,  ev_d2h_end);
+
+        const auto wall_end = std::chrono::steady_clock::now();
+        timing->wall_ms = static_cast<float>(
+            std::chrono::duration<double, std::milli>(wall_end - wall_start).count());
+
+        cudaEventDestroy(ev_h2d_start);  cudaEventDestroy(ev_h2d_end);
+        cudaEventDestroy(ev_kern_start); cudaEventDestroy(ev_kern_end);
+        cudaEventDestroy(ev_d2h_start);  cudaEventDestroy(ev_d2h_end);
+    }
 }
 
 } // namespace sim::gpu_priority_queue

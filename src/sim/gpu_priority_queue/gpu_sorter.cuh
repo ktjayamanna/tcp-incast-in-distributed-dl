@@ -8,6 +8,15 @@ namespace sim::gpu_priority_queue
 // Maximum packets per sort call (padded internally to next power of 2).
 static constexpr int kMaxSortCapacity = 65536;
 
+// Per-call timing breakdown from GpuSorter::sort().
+struct SortTiming
+{
+    float h2d_ms    = 0.f;  // host-to-device transfer
+    float kernel_ms = 0.f;  // GPU bitonic sort kernels
+    float d2h_ms    = 0.f;  // device-to-host transfer
+    float wall_ms   = 0.f;  // total wall-clock time for the entire call
+};
+
 // Manages pinned host staging buffers and device buffers for one parallel
 // bitonic-sort invocation at a time.
 //
@@ -23,9 +32,11 @@ public:
 
     // Sort n entries.  Writes the permutation of [0, n) into out_indices such
     // that sort_keys[out_indices[0]] is the minimum (highest-priority) key.
+    // If timing is non-null, per-phase timing is written to *timing.
     void sort(const std::uint64_t* sort_keys,
               std::uint32_t*       out_indices,
-              int                  n);
+              int                  n,
+              SortTiming*          timing = nullptr);
 
 private:
     int padded_capacity_;  // next power-of-2 >= max_batch_size

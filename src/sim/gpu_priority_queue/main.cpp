@@ -104,9 +104,11 @@ int main(int argc, char** argv)
         if (input_path.empty())
             throw std::invalid_argument("--input is required");
 
-        sim::cpu_fifo::trace_csv::CsvPacketSource packet_source(input_path);
-        sim::gpu_priority_queue::Engine           engine(config);
-        const sim::gpu_priority_queue::SimStats   stats = engine.run(packet_source);
+        sim::cpu_fifo::trace_csv::CsvPacketSource  packet_source(input_path);
+        sim::gpu_priority_queue::Engine            engine(config);
+        const sim::gpu_priority_queue::GpuSimStats result = engine.run(packet_source);
+        const auto& stats     = result.sim;
+        const auto& gpu       = result.gpu;
 
         std::cout << "arrived_packets="    << stats.arrived_packets    << '\n';
         std::cout << "dropped_packets="    << stats.dropped_packets    << '\n';
@@ -130,6 +132,21 @@ int main(int argc, char** argv)
                   << average_or_zero(stats.queue_delay_us_control) << '\n';
         std::cout << "avg_queue_delay_us_bulk="
                   << average_or_zero(stats.queue_delay_us_bulk) << '\n';
+
+        // GPU timing summary
+        const double avg_batch =
+            gpu.sort_calls ? static_cast<double>(gpu.total_packets_sorted) / gpu.sort_calls : 0.0;
+        const double speedup =
+            gpu.total_gpu_wall_ms > 0.0 ? gpu.total_cpu_sort_ms / gpu.total_gpu_wall_ms : 0.0;
+        std::cout << "gpu_sort_calls="          << gpu.sort_calls               << '\n';
+        std::cout << "gpu_total_packets_sorted=" << gpu.total_packets_sorted     << '\n';
+        std::cout << "gpu_avg_batch_size="       << avg_batch                   << '\n';
+        std::cout << "gpu_total_h2d_ms="         << gpu.total_h2d_ms            << '\n';
+        std::cout << "gpu_total_kernel_ms="      << gpu.total_kernel_ms         << '\n';
+        std::cout << "gpu_total_d2h_ms="         << gpu.total_d2h_ms            << '\n';
+        std::cout << "gpu_total_wall_ms="        << gpu.total_gpu_wall_ms       << '\n';
+        std::cout << "cpu_sort_equivalent_ms="   << gpu.total_cpu_sort_ms       << '\n';
+        std::cout << "gpu_vs_cpu_speedup="       << speedup                     << '\n';
         return 0;
     }
     catch (const std::exception& ex)

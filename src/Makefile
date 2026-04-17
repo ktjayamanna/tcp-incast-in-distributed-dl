@@ -21,7 +21,7 @@ GPU_PRIORITY_SRCS := sim/gpu_priority_queue/gpu_sorter.cu \
                      sim/cpu_fifo/trace_csv.cpp
 
 .PHONY: tmp-install build-cpu-fifo build-cpu-priority-queue build-gpu-priority-queue \
-        generate-trace run-cpu-fifo run-cpu-priority-queue run-gpu-priority-queue clean
+        generate-trace run-cpu-fifo run-cpu-priority-queue run-gpu-priority-queue run-all clean
 
 tmp-install:
 	$(PYTHON) -m pip install -e .[dev]
@@ -67,6 +67,11 @@ run-gpu-priority-queue: build-gpu-priority-queue
 		$(MAKE) generate-trace SCENARIO=$(SCENARIO) TRACE_DIR=$(TRACE_DIR); \
 	fi; \
 	$(GPU_PRIORITY_BIN) --input "$$TRACE_PATH" --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
+
+OUTPUT_FILE ?= results.xlsx
+
+run-all:
+	PYTHONPATH=. SCENARIO=$(SCENARIO) LINK_BPS=$(LINK_BPS) BUFFER_BYTES=$(BUFFER_BYTES) TRACE_DIR=$(TRACE_DIR) OUTPUT_FILE=$(OUTPUT_FILE) $(PYTHON) scripts/run_all_and_export.py
 
 clean:
 	rm -rf $(BUILD_DIR)

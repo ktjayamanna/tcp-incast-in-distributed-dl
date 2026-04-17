@@ -1,21 +1,54 @@
 {
-    "name": "NS2 Environment",
-    "dockerFile": "../Dockerfile",
-    "workspaceMount": "source=${localWorkspaceFolder},target=/code,type=bind,consistency=cached",
-    "workspaceFolder": "/code",
+    "name": "smartconvert",
+    "build": {
+        "dockerfile": "../Dockerfile",
+        "context": ".."
+    },
     "mounts": [
-        "source=${localEnv:HOME}/.ssh,target=/tmp/.ssh-host,type=bind,readonly"
+        "source=${localWorkspaceFolder},target=/code,type=bind",
+        "source=${localEnv:HOME}/.ssh,target=/root/.ssh,type=bind,consistency=cached"
     ],
-    "postCreateCommand": "mkdir -p /root/.ssh && cp -r /tmp/.ssh-host/* /root/.ssh/ && chmod 700 /root/.ssh && chmod 600 /root/.ssh/* 2>/dev/null || true",
+    "runArgs": [
+        "--gpus=all",
+        "--env",
+        "NVIDIA_VISIBLE_DEVICES=all",
+        "--env",
+        "NVIDIA_DRIVER_CAPABILITIES=all",
+        "--shm-size=8g",
+        "--env-file=${localWorkspaceFolder}/.devcontainer/.env"
+    ],
+    "features": {
+        "ghcr.io/devcontainers/features/git:1": {},
+        "ghcr.io/devcontainers/features/github-cli:1": {}
+    },
+    "workspaceFolder": "/code",
     "customizations": {
         "vscode": {
             "extensions": [
-                "ms-vscode.cpptools",
+                "ms-python.python",
+                "ms-python.black-formatter",
+                "ms-toolsai.jupyter",
                 "augment.vscode-augment",
-                "pomdtr.excalidraw-editor",
-                "anthropic.claude-code",
-                "openai.chatgpt"
-            ]
+                "ms-vscode.cpptools",
+                "ms-vscode.cmake-tools",
+                "nvidia.nsight-vscode-edition",
+                "nvidia.nsight-copilot",
+                "openai.chatgpt",
+                "anthropic.claude-code"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/opt/conda/bin/python",
+                "python.terminal.activateEnvironment": false,
+                "python.formatting.provider": "black",
+                "python.linting.enabled": true,
+                "python.linting.pylintEnabled": true
+            }
         }
-    }
+    },
+    "forwardPorts": [
+        8888,
+        6006
+    ],
+    "postCreateCommand": "chmod 700 /root/.ssh && chmod 600 /root/.ssh/id_* /root/.ssh/config 2>/dev/null || true && chmod 644 /root/.ssh/*.pub 2>/dev/null || true && git config --global user.name \"${GIT_AUTHOR_NAME}\" && git config --global user.email \"${GIT_AUTHOR_EMAIL}\" && git config --global --add safe.directory /code && echo 'Dev container ready! GPU:' && python -c 'import torch; print(torch.cuda.is_available())' && echo 'Git configured:' && git config user.name && git config user.email",
+    "remoteUser": "root"
 }

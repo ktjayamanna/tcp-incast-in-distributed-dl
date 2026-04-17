@@ -1,6 +1,7 @@
 #include "engine.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -58,13 +59,16 @@ Engine::Engine(SimConfig config)
     validate_config_or_throw(config_);
 }
 
-SimStats Engine::run(PacketSource& packet_source)
+GpuSimStats Engine::run(PacketSource& packet_source)
 {
-    SimStats stats{};
+    GpuSimStats result{};
+    SimStats&    stats     = result.sim;
+    GpuSortStats& gpu_stats = result.gpu;
 
     std::vector<PendingEntry>  pending;         // unsorted packets currently in buffer
     std::vector<std::uint64_t> sort_keys;       // scratch: sort keys for GPU
     std::vector<std::uint32_t> sorted_indices;  // scratch: GPU output (priority order)
+    std::vector<std::uint64_t> cpu_sort_scratch; // scratch: CPU sort comparison
 
     std::uint64_t queued_bytes      = 0;
     std::uint32_t sequence          = 0;
@@ -87,7 +91,24 @@ SimStats Engine::run(PacketSource& packet_source)
                 pending[i].sequence);
 
         // GPU bitonic sort: sorted_indices[0] = index of highest-priority packet
-        sorter_.sort(sort_keys.data(), sorted_indices.data(), n);
+        SortTiming t{};
+        sorter_.sort(sort_keys.data(), sorted_indices.data(), n, &t);
+
+        // Accumulate GPU timing.
+        gpu_stats.sort_calls           += 1;
+        gpu_stats.total_packets_sorted += static_cast<std::uint64_t>(n);
+        gpu_stats.total_h2d_ms         += t.h2d_ms;
+        gpu_stats.total_kernel_ms      += t.kernel_ms;
+        gpu_stats.total_d2h_ms         += t.d2h_ms;
+        gpu_stats.total_gpu_wall_ms    += t.wall_ms;
+
+        // CPU comparison: time std::sort on the same keys (result discarded).
+        cpu_sort_scratch.assign(sort_keys.begin(), sort_keys.begin() + n);
+        const auto cpu_t0 = std::chrono::steady_clock::now();
+        std::sort(cpu_sort_scratch.begin(), cpu_sort_scratch.end());
+        const auto cpu_t1 = std::chrono::steady_clock::now();
+        gpu_stats.total_cpu_sort_ms +=
+            std::chrono::duration<double, std::milli>(cpu_t1 - cpu_t0).count();
 
         std::vector<bool> consumed(static_cast<std::size_t>(n), false);
 
@@ -160,7 +181,7 @@ SimStats Engine::run(PacketSource& packet_source)
     // Drain everything that remains.
     drain_until(std::numeric_limits<std::int64_t>::max());
 
-    return stats;
+    return result;
 }
 
 } // namespace sim::gpu_priority_queue
