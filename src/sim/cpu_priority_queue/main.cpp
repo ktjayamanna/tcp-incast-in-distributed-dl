@@ -6,9 +6,9 @@
 #include <string>
 #include <vector>
 
+#include "../cpu_fifo/trace_csv.hpp"
 #include "config.hpp"
 #include "engine.hpp"
-#include "trace_csv.hpp"
 
 namespace
 {
@@ -77,7 +77,7 @@ int main(int argc, char **argv)
     try
     {
         std::string input_path;
-        sim::cpu_fifo::SimConfig config{};
+        sim::cpu_priority_queue::SimConfig config{};
 
         for (int i = 1; i < argc; ++i)
         {
@@ -123,8 +123,8 @@ int main(int argc, char **argv)
         }
 
         sim::cpu_fifo::trace_csv::CsvPacketSource packet_source(input_path);
-        sim::cpu_fifo::Engine engine(config);
-        const sim::cpu_fifo::SimStats stats = engine.run(packet_source);
+        sim::cpu_priority_queue::Engine engine(config);
+        const sim::cpu_priority_queue::SimStats stats = engine.run(packet_source);
 
         std::cout << "arrived_packets=" << stats.arrived_packets << '\n';
         std::cout << "dropped_packets=" << stats.dropped_packets << '\n';

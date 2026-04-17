@@ -29,6 +29,17 @@ namespace sim::cpu_fifo
         std::optional<SyntheticPacketMetadata> synthetic_metadata;
     };
 
+    struct TrafficClassCounters
+    {
+        std::uint64_t arrived_packets = 0;
+        std::uint64_t dropped_packets = 0;
+        std::uint64_t transmitted_packets = 0;
+
+        std::uint64_t arrived_bytes = 0;
+        std::uint64_t dropped_bytes = 0;
+        std::uint64_t transmitted_bytes = 0;
+    };
+
     struct SimStats
     {
         std::uint64_t arrived_packets = 0;
@@ -38,6 +49,9 @@ namespace sim::cpu_fifo
         std::uint64_t arrived_bytes = 0;
         std::uint64_t dropped_bytes = 0;
         std::uint64_t transmitted_bytes = 0;
+
+        TrafficClassCounters control{};
+        TrafficClassCounters bulk{};
 
         std::vector<std::int64_t> queue_delay_us_all;
         std::vector<std::int64_t> queue_delay_us_control;

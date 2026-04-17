@@ -12,6 +12,15 @@ namespace sim::cpu_fifo
     namespace
     {
 
+        TrafficClassCounters &class_counters(SimStats &stats, TrafficClass traffic_class)
+        {
+            if (traffic_class == TrafficClass::Control)
+            {
+                return stats.control;
+            }
+            return stats.bulk;
+        }
+
         std::int64_t transmission_time_us(std::uint32_t packet_size_bytes, std::uint64_t link_bandwidth_bps)
         {
             const std::uint64_t packet_bits = static_cast<std::uint64_t>(packet_size_bytes) * 8ULL;
@@ -51,6 +60,9 @@ namespace sim::cpu_fifo
             Packet packet = packet_source.next();
             stats.arrived_packets += 1;
             stats.arrived_bytes += packet.packet_size_bytes;
+            TrafficClassCounters &packet_class_stats = class_counters(stats, packet.traffic_class);
+            packet_class_stats.arrived_packets += 1;
+            packet_class_stats.arrived_bytes += packet.packet_size_bytes;
 
             while (!queued_departures.empty() && queued_departures.front().first <= packet.arrival_time_us)
             {
@@ -62,6 +74,8 @@ namespace sim::cpu_fifo
             {
                 stats.dropped_packets += 1;
                 stats.dropped_bytes += packet.packet_size_bytes;
+                packet_class_stats.dropped_packets += 1;
+                packet_class_stats.dropped_bytes += packet.packet_size_bytes;
                 continue;
             }
 
@@ -76,6 +90,8 @@ namespace sim::cpu_fifo
 
             stats.transmitted_packets += 1;
             stats.transmitted_bytes += packet.packet_size_bytes;
+            packet_class_stats.transmitted_packets += 1;
+            packet_class_stats.transmitted_bytes += packet.packet_size_bytes;
             record_queue_delay(stats, packet, queue_delay_us);
         }
 
