@@ -1,11 +1,13 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "../cpu_fifo/socket_source.hpp"
 #include "../cpu_fifo/trace_csv.hpp"
 #include "config.hpp"
 #include "engine.hpp"
@@ -16,8 +18,9 @@ namespace
     void print_usage(const char *program_name)
     {
         std::cerr
-            << "Usage: " << program_name << " --input <trace.csv> [--link-bps <bits_per_second>]"
-            << " [--buffer-bytes <bytes>]\n";
+            << "Usage: " << program_name
+            << " (--input <trace.csv> | --socket <port>)"
+            << " [--link-bps <bits_per_second>] [--buffer-bytes <bytes>]\n";
     }
 
     std::uint64_t parse_u64_arg(const std::string &value, const char *flag_name)
@@ -77,6 +80,7 @@ int main(int argc, char **argv)
     try
     {
         std::string input_path;
+        std::uint16_t socket_port = 0;
         sim::cpu_priority_queue::SimConfig config{};
 
         for (int i = 1; i < argc; ++i)
@@ -89,6 +93,14 @@ int main(int argc, char **argv)
                     throw std::invalid_argument("--input requires a value");
                 }
                 input_path = argv[++i];
+            }
+            else if (arg == "--socket")
+            {
+                if (i + 1 >= argc)
+                {
+                    throw std::invalid_argument("--socket requires a port number");
+                }
+                socket_port = static_cast<std::uint16_t>(parse_u64_arg(argv[++i], "--socket"));
             }
             else if (arg == "--link-bps")
             {
@@ -117,14 +129,19 @@ int main(int argc, char **argv)
             }
         }
 
-        if (input_path.empty())
+        if (input_path.empty() && socket_port == 0)
         {
-            throw std::invalid_argument("--input is required");
+            throw std::invalid_argument("--input or --socket is required");
         }
 
-        sim::cpu_fifo::trace_csv::CsvPacketSource packet_source(input_path);
+        std::unique_ptr<sim::cpu_fifo::PacketSource> source;
+        if (socket_port != 0)
+            source = std::make_unique<sim::cpu_fifo::SocketPacketSource>(socket_port);
+        else
+            source = std::make_unique<sim::cpu_fifo::trace_csv::CsvPacketSource>(input_path);
+
         sim::cpu_priority_queue::Engine engine(config);
-        const sim::cpu_priority_queue::SimStats stats = engine.run(packet_source);
+        const sim::cpu_priority_queue::SimStats stats = engine.run(*source);
 
         std::cout << "arrived_packets=" << stats.arrived_packets << '\n';
         std::cout << "dropped_packets=" << stats.dropped_packets << '\n';

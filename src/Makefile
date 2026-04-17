@@ -12,18 +12,22 @@ BUFFER_BYTES ?= 52428800
 BUILD_DIR        := build
 TRACE_DIR        := data/traces
 
+SOCKET_PORT ?= 9000
+
 CPU_FIFO_BIN     := $(BUILD_DIR)/cpu_fifo_sim
-CPU_FIFO_SRCS    := sim/cpu_fifo/main.cpp sim/cpu_fifo/engine.cpp sim/cpu_fifo/trace_csv.cpp
+CPU_FIFO_SRCS    := sim/cpu_fifo/main.cpp sim/cpu_fifo/engine.cpp sim/cpu_fifo/trace_csv.cpp \
+                    sim/cpu_fifo/socket_source.cpp
 
 CPU_PQ_BIN       := $(BUILD_DIR)/cpu_priority_queue_sim
 CPU_PQ_SRCS      := sim/cpu_priority_queue/main.cpp sim/cpu_priority_queue/engine.cpp \
-                    sim/cpu_fifo/trace_csv.cpp
+                    sim/cpu_fifo/trace_csv.cpp sim/cpu_fifo/socket_source.cpp
 
 GPU_PQ_BIN       := $(BUILD_DIR)/gpu_priority_queue_sim
 GPU_PQ_SRCS      := sim/gpu_priority_queue/gpu_sorter.cu sim/gpu_priority_queue/engine.cpp \
-                    sim/gpu_priority_queue/main.cpp sim/cpu_fifo/trace_csv.cpp
+                    sim/gpu_priority_queue/main.cpp sim/cpu_fifo/trace_csv.cpp \
+                    sim/cpu_fifo/socket_source.cpp
 
-.PHONY: install build run-all clean
+.PHONY: install build run-all run-cpu-fifo-socket run-cpu-priority-queue-socket run-gpu-priority-queue-socket clean
 
 install:
 	$(PYTHON) -m pip install -e .[dev]
@@ -69,6 +73,15 @@ run-cpu-priority-queue: $(CPU_PQ_BIN) $(TRACE_PATH)
 
 run-gpu-priority-queue: $(GPU_PQ_BIN) $(TRACE_PATH)
 	$(GPU_PQ_BIN) --input "$(TRACE_PATH)" --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
+
+run-cpu-fifo-socket: $(CPU_FIFO_BIN)
+	$(CPU_FIFO_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
+
+run-cpu-priority-queue-socket: $(CPU_PQ_BIN)
+	$(CPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
+
+run-gpu-priority-queue-socket: $(GPU_PQ_BIN)
+	$(GPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
 
 run-all: build
 	PYTHONPATH=. SCENARIO=$(SCENARIO) LINK_BPS=$(LINK_BPS) BUFFER_BYTES=$(BUFFER_BYTES) \
