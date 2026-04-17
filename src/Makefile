@@ -6,7 +6,13 @@ NVCCFLAGS ?= -std=c++17 -O2
 
 SCENARIO ?= normal_traffic
 LINK_BPS ?= 40000000000
-BUFFER_BYTES ?= 262144
+
+# Per-scenario buffer defaults. Can always be overridden: make run-all BUFFER_BYTES=xyz
+BUFFER_BYTES_normal_traffic      ?= 262144
+BUFFER_BYTES_high_congestion     ?= 262144
+BUFFER_BYTES_congestion_avoidance ?= 262144
+BUFFER_BYTES_datacenter_scale    ?= 52428800
+BUFFER_BYTES ?= $(BUFFER_BYTES_$(SCENARIO))
 
 BUILD_DIR ?= build
 TRACE_DIR ?= data/traces

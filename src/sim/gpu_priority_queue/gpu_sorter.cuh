@@ -5,8 +5,8 @@
 namespace sim::gpu_priority_queue
 {
 
-// Maximum packets per sort call (padded internally to next power of 2).
-static constexpr int kMaxSortCapacity = 65536;
+// Maximum packets per sort call.
+static constexpr int kMaxSortCapacity = 131072;
 
 // Per-call timing breakdown from GpuSorter::sort().
 struct SortTiming
@@ -39,7 +39,7 @@ public:
               SortTiming*          timing = nullptr);
 
 private:
-    int padded_capacity_;  // next power-of-2 >= max_batch_size
+    int capacity_;  // maximum n per sort call
 
     // Device buffers
     std::uint64_t* d_keys_    = nullptr;

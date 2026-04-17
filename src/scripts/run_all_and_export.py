@@ -101,8 +101,18 @@ def main():
     """Main function."""
     scenario = os.environ.get('SCENARIO', 'normal_traffic')
     link_bps = int(os.environ.get('LINK_BPS', '40000000000'))
-    buffer_bytes = int(os.environ.get('BUFFER_BYTES', '262144'))
     trace_dir = os.environ.get('TRACE_DIR', 'data/traces')
+
+    # Use per-scenario buffer default unless explicitly overridden.
+    if 'BUFFER_BYTES' in os.environ:
+        buffer_bytes = int(os.environ['BUFFER_BYTES'])
+    else:
+        sys.path.insert(0, '.')
+        from traffic.config import ScenarioName, get_buffer_bytes
+        try:
+            buffer_bytes = get_buffer_bytes(ScenarioName(scenario))
+        except (KeyError, ValueError):
+            buffer_bytes = 262144
     output_file = os.environ.get('OUTPUT_FILE', 'results.xlsx')
     
     # Create output directory if it doesn't exist
