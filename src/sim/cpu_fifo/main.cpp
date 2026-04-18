@@ -1,172 +1,58 @@
-#include <cstdint>
-#include <exception>
 #include <iostream>
 #include <memory>
-#include <numeric>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
+#include "../main_helpers.hpp"
 #include "config.hpp"
 #include "engine.hpp"
 #include "socket_source.hpp"
 #include "trace_csv.hpp"
 
-namespace
-{
-
-    void print_usage(const char *program_name)
-    {
-        std::cerr
-            << "Usage: " << program_name
-            << " (--input <trace.csv> | --socket <port>)"
-            << " [--link-bps <bits_per_second>] [--buffer-bytes <bytes>]\n";
-    }
-
-    std::uint64_t parse_u64_arg(const std::string &value, const char *flag_name)
-    {
-        std::size_t pos = 0;
-        const unsigned long long parsed = std::stoull(value, &pos, 10);
-        if (pos != value.size())
-        {
-            throw std::invalid_argument(std::string(flag_name) + " must be an unsigned integer");
-        }
-        return static_cast<std::uint64_t>(parsed);
-    }
-
-    double average_or_zero(const std::vector<std::int64_t> &values)
-    {
-        if (values.empty())
-        {
-            return 0.0;
-        }
-        const auto total = std::accumulate(values.begin(), values.end(), 0.0);
-        return total / static_cast<double>(values.size());
-    }
-
-    double ratio_or_zero(std::uint64_t numerator, std::uint64_t denominator)
-    {
-        if (denominator == 0)
-        {
-            return 0.0;
-        }
-        return static_cast<double>(numerator) / static_cast<double>(denominator);
-    }
-
-    void print_class_summary(
-        const char *label,
-        const sim::cpu_fifo::TrafficClassCounters &counters)
-    {
-        std::cout << label << "_arrived_packets=" << counters.arrived_packets << '\n';
-        std::cout << label << "_dropped_packets=" << counters.dropped_packets << '\n';
-        std::cout << label << "_transmitted_packets=" << counters.transmitted_packets << '\n';
-        std::cout << label << "_arrived_bytes=" << counters.arrived_bytes << '\n';
-        std::cout << label << "_dropped_bytes=" << counters.dropped_bytes << '\n';
-        std::cout << label << "_transmitted_bytes=" << counters.transmitted_bytes << '\n';
-        std::cout << label << "_drop_packet_ratio="
-                  << ratio_or_zero(counters.dropped_packets, counters.arrived_packets) << '\n';
-        std::cout << label << "_transmit_packet_ratio="
-                  << ratio_or_zero(counters.transmitted_packets, counters.arrived_packets) << '\n';
-        std::cout << label << "_drop_byte_ratio="
-                  << ratio_or_zero(counters.dropped_bytes, counters.arrived_bytes) << '\n';
-        std::cout << label << "_transmit_byte_ratio="
-                  << ratio_or_zero(counters.transmitted_bytes, counters.arrived_bytes) << '\n';
-    }
-
-} // namespace
-
 int main(int argc, char **argv)
 {
     try
     {
-        std::string input_path;
+        std::string   input_path;
         std::uint16_t socket_port = 0;
         sim::cpu_fifo::SimConfig config{};
 
         for (int i = 1; i < argc; ++i)
         {
             const std::string arg = argv[i];
-            if (arg == "--input")
-            {
-                if (i + 1 >= argc)
-                {
-                    throw std::invalid_argument("--input requires a value");
-                }
+            if (arg == "--input" && i + 1 < argc)
                 input_path = argv[++i];
-            }
-            else if (arg == "--socket")
-            {
-                if (i + 1 >= argc)
-                {
-                    throw std::invalid_argument("--socket requires a port number");
-                }
-                socket_port = static_cast<std::uint16_t>(parse_u64_arg(argv[++i], "--socket"));
-            }
-            else if (arg == "--link-bps")
-            {
-                if (i + 1 >= argc)
-                {
-                    throw std::invalid_argument("--link-bps requires a value");
-                }
-                config.link_bandwidth_bps = parse_u64_arg(argv[++i], "--link-bps");
-            }
-            else if (arg == "--buffer-bytes")
-            {
-                if (i + 1 >= argc)
-                {
-                    throw std::invalid_argument("--buffer-bytes requires a value");
-                }
-                config.buffer_capacity_bytes = parse_u64_arg(argv[++i], "--buffer-bytes");
-            }
+            else if (arg == "--socket" && i + 1 < argc)
+                socket_port = static_cast<std::uint16_t>(sim::parse_u64(argv[++i], "--socket"));
+            else if (arg == "--link-bps" && i + 1 < argc)
+                config.link_bandwidth_bps = sim::parse_u64(argv[++i], "--link-bps");
+            else if (arg == "--buffer-bytes" && i + 1 < argc)
+                config.buffer_capacity_bytes = sim::parse_u64(argv[++i], "--buffer-bytes");
             else if (arg == "--help" || arg == "-h")
             {
-                print_usage(argv[0]);
+                std::cerr << "Usage: " << argv[0]
+                          << " (--input <trace.csv> | --socket <port>)"
+                          << " [--link-bps N] [--buffer-bytes N]\n";
                 return 0;
-            }
-            else
-            {
-                throw std::invalid_argument("Unknown argument: " + arg);
             }
         }
 
         if (input_path.empty() && socket_port == 0)
-        {
             throw std::invalid_argument("--input or --socket is required");
-        }
 
         std::unique_ptr<sim::cpu_fifo::PacketSource> source;
-        if (socket_port != 0)
+        if (socket_port)
             source = std::make_unique<sim::cpu_fifo::SocketPacketSource>(socket_port);
         else
             source = std::make_unique<sim::cpu_fifo::trace_csv::CsvPacketSource>(input_path);
 
-        sim::cpu_fifo::Engine engine(config);
-        const sim::cpu_fifo::SimStats stats = engine.run(*source);
-
-        std::cout << "arrived_packets=" << stats.arrived_packets << '\n';
-        std::cout << "dropped_packets=" << stats.dropped_packets << '\n';
-        std::cout << "transmitted_packets=" << stats.transmitted_packets << '\n';
-        std::cout << "arrived_bytes=" << stats.arrived_bytes << '\n';
-        std::cout << "dropped_bytes=" << stats.dropped_bytes << '\n';
-        std::cout << "transmitted_bytes=" << stats.transmitted_bytes << '\n';
-        std::cout << "drop_packet_ratio="
-                  << ratio_or_zero(stats.dropped_packets, stats.arrived_packets) << '\n';
-        std::cout << "transmit_packet_ratio="
-                  << ratio_or_zero(stats.transmitted_packets, stats.arrived_packets) << '\n';
-        std::cout << "drop_byte_ratio="
-                  << ratio_or_zero(stats.dropped_bytes, stats.arrived_bytes) << '\n';
-        std::cout << "transmit_byte_ratio="
-                  << ratio_or_zero(stats.transmitted_bytes, stats.arrived_bytes) << '\n';
-        print_class_summary("control", stats.control);
-        print_class_summary("bulk", stats.bulk);
-        std::cout << "avg_queue_delay_us_all=" << average_or_zero(stats.queue_delay_us_all) << '\n';
-        std::cout << "avg_queue_delay_us_control=" << average_or_zero(stats.queue_delay_us_control) << '\n';
-        std::cout << "avg_queue_delay_us_bulk=" << average_or_zero(stats.queue_delay_us_bulk) << '\n';
+        sim::cpu_fifo::Engine  engine(config);
+        const auto             stats = engine.run(*source);
+        sim::print_stats(stats);
         return 0;
     }
     catch (const std::exception &ex)
     {
-        print_usage(argv[0]);
         std::cerr << "error: " << ex.what() << '\n';
         return 1;
     }

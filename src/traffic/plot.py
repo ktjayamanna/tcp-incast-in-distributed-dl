@@ -206,7 +206,7 @@ def main() -> None:
     parser.add_argument(
         "--scenario",
         type=_scenario_from_string,
-        default=ScenarioName.NORMAL_TRAFFIC,
+        default=ScenarioName.LOW,
         help="Scenario name.",
     )
     parser.add_argument(

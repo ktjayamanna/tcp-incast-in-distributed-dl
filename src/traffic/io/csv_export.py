@@ -6,15 +6,11 @@ from typing import Iterable
 
 from traffic.config import ScenarioName, TrafficConfig
 from traffic.generator import generate_traffic
-from traffic.schema import TrafficEvents
 from traffic.validate import validate_generated_traffic
 
 
 TRACE_COLUMNS = (
     "packet_start_us",
-    "wave_id",
-    "sender_id",
-    "packet_index_for_sender",
     "packet_size_bytes",
     "traffic_class",
     "priority_tag",
@@ -29,33 +25,19 @@ def build_trace_path(
     scenario_name: ScenarioName | None = None,
     output_dir: Path = DEFAULT_TRACE_DIR,
 ) -> Path:
-    scenario_label = scenario_name.value if scenario_name is not None else "custom"
-    filename = (
-        f"{scenario_label}"
-        f"_seed{config.seed}"
-        f"_senders{config.senders_per_wave}"
-        f"_waves{config.number_of_waves}.csv"
-    )
+    label = scenario_name.value if scenario_name is not None else "custom"
+    filename = f"{label}_seed{config.seed}_senders{config.senders_per_wave}_waves{config.number_of_waves}.csv"
     return output_dir / filename
 
 
 def export_events_to_csv(events: Iterable, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.writer(csv_file)
+    with output_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
         writer.writerow(TRACE_COLUMNS)
-        for event in events:
-            writer.writerow(
-                [
-                    event.packet_start_us,
-                    event.wave_id,
-                    event.sender_id,
-                    event.packet_index_for_sender,
-                    event.packet_size_bytes,
-                    event.traffic_class.value,
-                    event.priority_tag,
-                ]
-            )
+        for e in events:
+            writer.writerow([e.packet_start_us, e.packet_size_bytes,
+                             e.traffic_class.value, e.priority_tag])
     return output_path
 
 
@@ -66,12 +48,8 @@ def generate_and_export_csv(
     output_dir: Path = DEFAULT_TRACE_DIR,
     validate: bool = True,
 ) -> Path:
-    events: TrafficEvents = generate_traffic(config)
+    events = generate_traffic(config)
     if validate:
         validate_generated_traffic(events, config)
-    output_path = build_trace_path(
-        config=config,
-        scenario_name=scenario_name,
-        output_dir=output_dir,
-    )
+    output_path = build_trace_path(config=config, scenario_name=scenario_name, output_dir=output_dir)
     return export_events_to_csv(events, output_path)

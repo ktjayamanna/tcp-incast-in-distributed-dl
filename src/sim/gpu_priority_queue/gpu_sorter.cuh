@@ -12,13 +12,13 @@ static constexpr int kMaxSortCapacity = 131072;
 struct SortTiming
 {
     float h2d_ms    = 0.f;  // host-to-device transfer
-    float kernel_ms = 0.f;  // GPU bitonic sort kernels
+    float kernel_ms = 0.f;  // GPU radix sort kernel (thrust::sort_by_key)
     float d2h_ms    = 0.f;  // device-to-host transfer
     float wall_ms   = 0.f;  // total wall-clock time for the entire call
 };
 
 // Manages pinned host staging buffers and device buffers for one parallel
-// bitonic-sort invocation at a time.
+// radix-sort invocation at a time.
 //
 // Sort key convention: a *smaller* key means *higher* scheduling priority.
 // Callers should encode:
