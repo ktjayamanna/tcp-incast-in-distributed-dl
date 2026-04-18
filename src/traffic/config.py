@@ -61,7 +61,7 @@ def high() -> TrafficConfig:
         senders_per_wave=10_000,
         number_of_waves=10,
         first_wave_start_us=0,
-        wave_interval_us=12_000,
+        wave_interval_us=9_000,
         max_start_offset_us=20,
         seed=3,
         bytes_per_sender_per_wave=4_500,
