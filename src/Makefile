@@ -9,6 +9,11 @@ LINK_BPS  ?= 40000000000
 
 BUFFER_BYTES ?= 52428800
 
+# Quick-compare settings: small scenario + tight buffer so drops appear fast.
+# Override on the command line: make compare COMPARE_SCENARIO=medium
+COMPARE_SCENARIO     ?= test
+COMPARE_BUFFER_BYTES ?= 1048576
+
 # Sort-latency model: represents AQM sort processing time on target hardware.
 # The wave jitter window is 20 µs (max_start_offset_us). Any engine whose
 # sort_latency_us > 20 µs cannot finish sorting before all wave packets arrive,
@@ -41,7 +46,7 @@ GPU_PQ_SRCS      := sim/gpu_priority_queue/gpu_sorter.cu sim/gpu_priority_queue/
                     sim/gpu_priority_queue/main.cpp sim/cpu_fifo/trace_csv.cpp \
                     sim/cpu_fifo/socket_source.cpp
 
-.PHONY: install build run-all \
+.PHONY: install build run-all compare \
 	run-cpu-fifo-socket run-cpu-priority-queue-socket run-gpu-priority-queue-socket \
 	run-cpu-fifo-ns3 run-cpu-priority-queue-ns3 run-gpu-priority-queue-ns3 \
 	clean
@@ -128,6 +133,19 @@ run-all: build
 	PYTHONPATH=. SCENARIO=$(SCENARIO) LINK_BPS=$(LINK_BPS) BUFFER_BYTES=$(BUFFER_BYTES) \
 	TRACE_DIR=$(TRACE_DIR) OUTPUT_FILE=results.xlsx \
 	$(PYTHON) scripts/run_all_and_export.py
+
+# compare: CPU PQ vs GPU PQ only, small scenario, fast terminal output.
+# Typical runtime: <10 s.  Override scenario/buffer on the command line.
+compare: $(CPU_PQ_BIN) $(GPU_PQ_BIN)
+	PYTHONPATH=. \
+	SCENARIO=$(COMPARE_SCENARIO) \
+	LINK_BPS=$(LINK_BPS) \
+	BUFFER_BYTES=$(COMPARE_BUFFER_BYTES) \
+	CPU_SORT_LATENCY_US=$(CPU_SORT_LATENCY_US) \
+	GPU_SORT_LATENCY_US=$(GPU_SORT_LATENCY_US) \
+	SORT_INTERVAL_US=$(SORT_INTERVAL_US) \
+	TRACE_DIR=$(TRACE_DIR) \
+	$(PYTHON) scripts/compare.py
 
 clean:
 	rm -rf $(BUILD_DIR)
