@@ -9,23 +9,17 @@ LINK_BPS  ?= 40000000000
 
 BUFFER_BYTES ?= 52428800
 
-# Quick-compare settings: small scenario + tight buffer so drops appear fast.
-# Override on the command line: make compare COMPARE_SCENARIO=medium
-COMPARE_SCENARIO     ?= test
-COMPARE_BUFFER_BYTES ?= 1048576
+# Quick-compare settings.
+# medium gives ~10K packets/wave — large enough that CPU std::sort > 20µs
+# (blind for the whole wave) while GPU kernel < 20µs (can still evict).
+# Override: make compare COMPARE_SCENARIO=high
+COMPARE_SCENARIO     ?= medium
+COMPARE_BUFFER_BYTES ?= 52428800
 
-# Sort-latency model: represents AQM sort processing time on target hardware.
-# The wave jitter window is 20 µs (max_start_offset_us). Any engine whose
-# sort_latency_us > 20 µs cannot finish sorting before all wave packets arrive,
-# so its eviction decisions are always stale → same drop rate as FIFO.
-# GPU sort at ~5 µs finishes mid-wave; 75 % of arrivals are post-sort and
-# benefit from preemptive eviction → 0 % control drops.
-#
-# Values calibrated to target hardware (40 Gbps switch):
-#   CPU: ARM switch CPU sorting ~30 K keys  → ~25 µs  (> 20 µs wave spread → blind)
-#   GPU: GPU co-processor, ~5× faster       → ~5 µs   (< 20 µs wave spread → sees 75 %)
-CPU_SORT_LATENCY_US  ?= 25
-GPU_SORT_LATENCY_US  ?= 5
+# Sort interval: how often the queue is re-sorted (µs of simulation time).
+# Blind window is now auto-measured from actual sort execution time —
+# std::sort wall time for CPU, GPU kernel time for GPU.
+# Pass --sort-latency-us N to override with a fixed value.
 SORT_INTERVAL_US     ?= 9000
 
 BUILD_DIR        := build
@@ -92,22 +86,22 @@ run-cpu-fifo: $(CPU_FIFO_BIN) $(TRACE_PATH)
 
 run-cpu-priority-queue: $(CPU_PQ_BIN) $(TRACE_PATH)
 	$(CPU_PQ_BIN) --input "$(TRACE_PATH)" --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) \
-	  --sort-latency-us $(CPU_SORT_LATENCY_US) --sort-interval-us $(SORT_INTERVAL_US)
+	  --sort-interval-us $(SORT_INTERVAL_US)
 
 run-gpu-priority-queue: $(GPU_PQ_BIN) $(TRACE_PATH)
 	$(GPU_PQ_BIN) --input "$(TRACE_PATH)" --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) \
-	  --sort-latency-us $(GPU_SORT_LATENCY_US) --sort-interval-us $(SORT_INTERVAL_US)
+	  --sort-interval-us $(SORT_INTERVAL_US)
 
 run-cpu-fifo-socket: $(CPU_FIFO_BIN)
 	$(CPU_FIFO_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
 
 run-cpu-priority-queue-socket: $(CPU_PQ_BIN)
 	$(CPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) \
-	  --sort-latency-us $(CPU_SORT_LATENCY_US) --sort-interval-us $(SORT_INTERVAL_US)
+	  --sort-interval-us $(SORT_INTERVAL_US)
 
 run-gpu-priority-queue-socket: $(GPU_PQ_BIN)
 	$(GPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) \
-	  --sort-latency-us $(GPU_SORT_LATENCY_US) --sort-interval-us $(SORT_INTERVAL_US)
+	  --sort-interval-us $(SORT_INTERVAL_US)
 
 run-cpu-fifo-ns3: $(CPU_FIFO_BIN)
 	$(CPU_FIFO_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) & \
@@ -117,14 +111,14 @@ run-cpu-fifo-ns3: $(CPU_FIFO_BIN)
 
 run-cpu-priority-queue-ns3: $(CPU_PQ_BIN)
 	$(CPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) \
-	  --sort-latency-us $(CPU_SORT_LATENCY_US) --sort-interval-us $(SORT_INTERVAL_US) & \
+	  --sort-interval-us $(SORT_INTERVAL_US) & \
 	sleep 0.5 && PYTHONPATH=. $(PYTHON) -m traffic.ns3_incast \
 	  --scenario $(SCENARIO) --port $(SOCKET_PORT) \
 	  --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
 
 run-gpu-priority-queue-ns3: $(GPU_PQ_BIN)
 	$(GPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) \
-	  --sort-latency-us $(GPU_SORT_LATENCY_US) --sort-interval-us $(SORT_INTERVAL_US) & \
+	  --sort-interval-us $(SORT_INTERVAL_US) & \
 	sleep 0.5 && PYTHONPATH=. $(PYTHON) -m traffic.ns3_incast \
 	  --scenario $(SCENARIO) --port $(SOCKET_PORT) \
 	  --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
@@ -141,8 +135,6 @@ compare: $(CPU_PQ_BIN) $(GPU_PQ_BIN)
 	SCENARIO=$(COMPARE_SCENARIO) \
 	LINK_BPS=$(LINK_BPS) \
 	BUFFER_BYTES=$(COMPARE_BUFFER_BYTES) \
-	CPU_SORT_LATENCY_US=$(CPU_SORT_LATENCY_US) \
-	GPU_SORT_LATENCY_US=$(GPU_SORT_LATENCY_US) \
 	SORT_INTERVAL_US=$(SORT_INTERVAL_US) \
 	TRACE_DIR=$(TRACE_DIR) \
 	$(PYTHON) scripts/compare.py

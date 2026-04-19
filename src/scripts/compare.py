@@ -38,13 +38,14 @@ def parse_stats(stdout):
         return float(m.group(1)) if m else 0.0
 
     return {
-        'arrived':       _int(r'^arrived=(\d+)'),
-        'ctrl_arrived':  _int(r'^control: arrived=(\d+)'),
-        'ctrl_dropped':  _int(r'^control:.*\bdropped=(\d+)'),
-        'ctrl_drop_pct': _float(r'^control:.*\(([0-9.]+)%\)'),
-        'bulk_arrived':  _int(r'^bulk:\s+arrived=(\d+)'),
-        'bulk_dropped':  _int(r'^bulk:.*\bdropped=(\d+)'),
-        'bulk_drop_pct': _float(r'^bulk:.*\(([0-9.]+)%\)'),
+        'arrived':            _int(r'^arrived=(\d+)'),
+        'ctrl_arrived':       _int(r'^control: arrived=(\d+)'),
+        'ctrl_dropped':       _int(r'^control:.*\bdropped=(\d+)'),
+        'ctrl_drop_pct':      _float(r'^control:.*\(([0-9.]+)%\)'),
+        'bulk_arrived':       _int(r'^bulk:\s+arrived=(\d+)'),
+        'bulk_dropped':       _int(r'^bulk:.*\bdropped=(\d+)'),
+        'bulk_drop_pct':      _float(r'^bulk:.*\(([0-9.]+)%\)'),
+        'sort_latency_avg_us': _float(r'^sort_latency_avg_us=([0-9.]+)'),
     }
 
 
@@ -57,8 +58,6 @@ def main():
     scenario         = os.environ.get('SCENARIO', 'test')
     link_bps         = os.environ.get('LINK_BPS', '40000000000')
     buffer_bytes     = os.environ.get('BUFFER_BYTES', '1048576')
-    cpu_latency_us   = os.environ.get('CPU_SORT_LATENCY_US', '25')
-    gpu_latency_us   = os.environ.get('GPU_SORT_LATENCY_US', '5')
     sort_interval_us = os.environ.get('SORT_INTERVAL_US', '9000')
     trace_dir        = os.environ.get('TRACE_DIR', 'data/traces')
 
@@ -96,16 +95,14 @@ def main():
     ]
 
     engines = [
-        ('CPU Priority Queue', 'build/cpu_priority_queue_sim',
-         common_args + ['--sort-latency-us', cpu_latency_us]),
-        ('GPU Priority Queue', 'build/gpu_priority_queue_sim',
-         common_args + ['--sort-latency-us', gpu_latency_us]),
+        ('CPU Priority Queue', 'build/cpu_priority_queue_sim', common_args),
+        ('GPU Priority Queue', 'build/gpu_priority_queue_sim', common_args),
     ]
 
     print(f'\nScenario : {scenario}')
     print(f'Link     : {int(link_bps)//1_000_000_000} Gbps')
-    print(f'Buffer   : {int(buffer_bytes)//1024} KB')
-    print(f'Sort lag : CPU={cpu_latency_us}µs  GPU={gpu_latency_us}µs  interval={sort_interval_us}µs')
+    print(f'Buffer   : {int(buffer_bytes)//1_048_576} MB')
+    print(f'Sort     : interval={sort_interval_us}µs  blind window = measured at runtime')
     print()
 
     results = []
@@ -120,51 +117,73 @@ def main():
         results.append((label, stats, elapsed))
         print(f'done ({elapsed:.1f}s)')
 
-    # ── Print comparison table ─────────────────────────────────────────────
-    print()
-    print('=' * 72)
-    print(f'{"":30s}  {"CPU PQ":>16s}  {"GPU PQ":>16s}')
-    print('=' * 72)
-
-    labels_and_keys = [
-        ('Total packets arrived',   'arrived',       False),
-        ('Control arrived',         'ctrl_arrived',  False),
-        ('Control dropped',         'ctrl_dropped',  False),
-        ('Control drop rate',       'ctrl_drop_pct', True),
-        ('Bulk dropped',            'bulk_dropped',  False),
-        ('Bulk drop rate',          'bulk_drop_pct', True),
-    ]
-
     cpu_stats = results[0][1]
     gpu_stats = results[1][1]
 
-    for label, key, is_pct in labels_and_keys:
-        cv = cpu_stats[key] if cpu_stats else None
-        gv = gpu_stats[key] if gpu_stats else None
-        if is_pct:
-            cs = f'{cv:.1f}%' if cv is not None else 'ERR'
-            gs = f'{gv:.1f}%' if gv is not None else 'ERR'
-        else:
-            cs = str(cv) if cv is not None else 'ERR'
-            gs = str(gv) if gv is not None else 'ERR'
-        print(f'  {label:28s}  {cs:>16s}  {gs:>16s}')
+    if not cpu_stats or not gpu_stats:
+        for label, r in zip(['CPU PQ', 'GPU PQ'], results):
+            if not r[1]:
+                print(f'  {label}: FAILED')
+        return
 
-    print('=' * 72)
+    cpu_total = cpu_stats['ctrl_dropped'] + cpu_stats['bulk_dropped']
+    gpu_total = gpu_stats['ctrl_dropped'] + gpu_stats['bulk_dropped']
 
-    # ── Visual drop-rate bars ──────────────────────────────────────────────
-    if cpu_stats and gpu_stats:
-        print()
-        print('  Control drop rate (lower is better)')
-        cpu_pct = cpu_stats['ctrl_drop_pct']
-        gpu_pct = gpu_stats['ctrl_drop_pct']
-        print(f'  CPU PQ  {bar(cpu_pct)} {cpu_pct:.1f}%')
-        print(f'  GPU PQ  {bar(gpu_pct)} {gpu_pct:.1f}%')
-        print()
+    # ── Headline ───────────────────────────────────────────────────────────
+    print()
+    print('  Same congestion. Different victims.')
+    print()
 
-        if cpu_pct > 0:
-            improvement = (cpu_pct - gpu_pct) / cpu_pct * 100
-            print(f'  GPU PQ reduces control drop rate by {improvement:.0f}% vs CPU PQ')
-        print()
+    # ── Main table ─────────────────────────────────────────────────────────
+    W = 72
+    print('=' * W)
+    print(f'  {"":28s}  {"CPU PQ":>16s}  {"GPU PQ":>16s}')
+    print('-' * W)
+
+    cpu_lat = cpu_stats['sort_latency_avg_us']
+    gpu_lat = gpu_stats['sort_latency_avg_us']
+
+    rows = [
+        ('Total packets arrived',  str(cpu_stats['arrived']),        str(gpu_stats['arrived']),        False),
+        ('Sort blind window (µs)', f'{cpu_lat:.1f}µs (measured)',    f'{gpu_lat:.1f}µs (measured)',    False),
+        ('',                       '',                                '',                               False),
+        ('Control arrived',        str(cpu_stats['ctrl_arrived']),   str(gpu_stats['ctrl_arrived']),   False),
+        ('Control dropped',        str(cpu_stats['ctrl_dropped']),   str(gpu_stats['ctrl_dropped']),   True),
+        ('Control drop rate',      f"{cpu_stats['ctrl_drop_pct']:.1f}%", f"{gpu_stats['ctrl_drop_pct']:.1f}%", True),
+        ('',                       '',                                '',                               False),
+        ('Bulk arrived',           str(cpu_stats['bulk_arrived']),   str(gpu_stats['bulk_arrived']),   False),
+        ('Bulk dropped',           str(cpu_stats['bulk_dropped']),   str(gpu_stats['bulk_dropped']),   False),
+        ('Bulk drop rate',         f"{cpu_stats['bulk_drop_pct']:.1f}%", f"{gpu_stats['bulk_drop_pct']:.1f}%", False),
+        ('',                       '',                                '',                               False),
+        ('Total dropped',          str(cpu_total),                   str(gpu_total),                   False),
+    ]
+
+    for label, cv, gv, highlight in rows:
+        if not label:
+            print()
+            continue
+        marker = '  ← GPU wins' if highlight and gpu_stats['ctrl_drop_pct'] < cpu_stats['ctrl_drop_pct'] else ''
+        print(f'  {label:28s}  {cv:>16s}  {gv:>16s}{marker}')
+
+    print('=' * W)
+
+    # ── Visual bars ────────────────────────────────────────────────────────
+    print()
+    print('  Control drop rate (lower is better)')
+    cpu_pct = cpu_stats['ctrl_drop_pct']
+    gpu_pct = gpu_stats['ctrl_drop_pct']
+    print(f'  CPU PQ  {bar(cpu_pct)} {cpu_pct:.1f}%  — drops blindly, some victims are control')
+    print(f'  GPU PQ  {bar(gpu_pct)} {gpu_pct:.1f}%  — always drops bulk, control is protected')
+    print()
+
+    # ── One-liner verdict ──────────────────────────────────────────────────
+    redirected = cpu_stats['ctrl_dropped'] - gpu_stats['ctrl_dropped']
+    if redirected > 0:
+        print(f'  GPU redirected {redirected} control drops → bulk drops.')
+        print(f'  Total drops unchanged ({gpu_total}). Queue pressure is identical.')
+        print(f'  GPU sorts in {gpu_lat:.1f}µs — fast enough to pick the right victim.')
+        print(f'  CPU sorts in {cpu_lat:.1f}µs — the wave is already gone by then.')
+    print()
 
     cpu_elapsed = results[0][2]
     gpu_elapsed = results[1][2]

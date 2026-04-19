@@ -2,6 +2,7 @@
 #include "../cpu_fifo/engine_utils.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <vector>
 
@@ -26,9 +27,11 @@ struct PendingEntry { Packet packet; std::uint32_t sequence = 0; };
 
 Engine::Engine(SimConfig config) : config_(config) { validate_config_or_throw(config_); }
 
-SimStats Engine::run(PacketSource &source)
+CpuPqSimStats Engine::run(PacketSource &source)
 {
-    SimStats stats{};
+    CpuPqSimStats result{};
+    SimStats&     stats      = result.sim;
+    CpuSortStats& sort_stats = result.sort;
 
     std::vector<PendingEntry>  pending;
     std::vector<std::uint32_t> sorted_indices;
@@ -57,16 +60,28 @@ SimStats Engine::run(PacketSource &source)
         for (int i = 0; i < n; ++i)
             sorted_indices[i] = static_cast<std::uint32_t>(i);
 
+        const auto t0 = std::chrono::steady_clock::now();
         std::sort(sorted_indices.begin(), sorted_indices.end(),
             [&](std::uint32_t a, std::uint32_t b)
             {
                 return make_sort_key(pending[a].packet.priority_tag, pending[a].sequence)
                      < make_sort_key(pending[b].packet.priority_tag, pending[b].sequence);
             });
+        const double measured_us = std::chrono::duration<double, std::micro>(
+            std::chrono::steady_clock::now() - t0).count();
 
-        sort_free_us       = epoch_us + config_.sort_latency_us;
-        next_sort_epoch_us = epoch_us + std::max(config_.sort_interval_us,
-                                                   config_.sort_latency_us);
+        sort_stats.sort_epochs    += 1;
+        sort_stats.total_sort_us  += measured_us;
+
+        // Use measured std::sort time as the blind window (how long the CPU
+        // was occupied sorting before eviction decisions could be made).
+        // If a manual override was provided via --sort-latency-us, honour it.
+        const std::int64_t latency_us = (config_.sort_latency_us > 0)
+            ? config_.sort_latency_us
+            : static_cast<std::int64_t>(measured_us);
+
+        sort_free_us       = epoch_us + latency_us;
+        next_sort_epoch_us = epoch_us + std::max(config_.sort_interval_us, latency_us);
 
         evict_candidate_seq = std::numeric_limits<std::uint32_t>::max();
         for (int i = static_cast<int>(n) - 1; i >= 0; --i)
@@ -212,7 +227,7 @@ SimStats Engine::run(PacketSource &source)
     }
 
     drain_until(std::numeric_limits<std::int64_t>::max());
-    return stats;
+    return result;
 }
 
 } // namespace sim::cpu_priority_queue

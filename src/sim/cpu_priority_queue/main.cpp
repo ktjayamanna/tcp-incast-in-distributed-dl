@@ -51,8 +51,13 @@ int main(int argc, char **argv)
             source = std::make_unique<sim::cpu_fifo::trace_csv::CsvPacketSource>(input_path);
 
         sim::cpu_priority_queue::Engine engine(config);
-        const auto                      stats = engine.run(*source);
-        sim::print_stats(stats);
+        const auto result = engine.run(*source);
+        sim::print_stats(result.sim);
+
+        const auto& s = result.sort;
+        const double avg_us = s.sort_epochs ? s.total_sort_us / s.sort_epochs : 0.0;
+        std::cout << "sort_epochs="          << s.sort_epochs    << '\n';
+        std::cout << "sort_latency_avg_us="  << avg_us           << '\n';
         return 0;
     }
     catch (const std::exception &ex)

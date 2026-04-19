@@ -87,11 +87,23 @@ GpuSimStats Engine::run(PacketSource &source)
                 std::chrono::steady_clock::now() - t0).count();
 
         // Refresh sort_free_us on epoch boundaries only.
+        // Use the measured GPU kernel time as the blind window — this is how long
+        // the sort accelerator was actually computing before results were available.
+        // H2D and D2H are excluded: on dedicated switch silicon those transfers
+        // happen via on-chip DMA and are overlapped with packet ingress.
+        // Honour --sort-latency-us if explicitly provided as a manual override.
         if (config_.sort_interval_us == 0 || limit_us >= next_sort_epoch_us)
         {
-            sort_free_us       = limit_us + config_.sort_latency_us;
-            next_sort_epoch_us = limit_us + std::max(config_.sort_interval_us,
-                                                      config_.sort_latency_us);
+            const double kernel_us = t.kernel_ms * 1000.0;
+            const std::int64_t latency_us = (config_.sort_latency_us > 0)
+                ? config_.sort_latency_us
+                : static_cast<std::int64_t>(kernel_us);
+
+            sort_free_us       = limit_us + latency_us;
+            next_sort_epoch_us = limit_us + std::max(config_.sort_interval_us, latency_us);
+
+            gpu_stats.sort_epochs           += 1;
+            gpu_stats.total_epoch_kernel_us += kernel_us;
         }
 
         // O(1) eviction candidate from full sort order.

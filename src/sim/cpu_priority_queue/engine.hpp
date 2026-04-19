@@ -15,11 +15,24 @@ using TrafficClass              = sim::cpu_fifo::TrafficClass;
 using TrafficClassCounters      = sim::cpu_fifo::TrafficClassCounters;
 using sim::cpu_fifo::validate_config_or_throw;
 
+// Sort timing measured from actual std::sort calls at epoch boundaries.
+struct CpuSortStats
+{
+    std::uint64_t sort_epochs           = 0;
+    double        total_sort_us         = 0.0;  // sum of measured std::sort durations
+};
+
+struct CpuPqSimStats
+{
+    SimStats     sim{};
+    CpuSortStats sort{};
+};
+
 class Engine
 {
 public:
     explicit Engine(SimConfig config);
-    SimStats run(PacketSource &source);
+    CpuPqSimStats run(PacketSource &source);
 
 private:
     SimConfig config_{};
