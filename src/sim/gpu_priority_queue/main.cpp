@@ -27,11 +27,16 @@ int main(int argc, char **argv)
                 config.link_bandwidth_bps = sim::parse_u64(argv[++i], "--link-bps");
             else if (arg == "--buffer-bytes" && i + 1 < argc)
                 config.buffer_capacity_bytes = sim::parse_u64(argv[++i], "--buffer-bytes");
+            else if (arg == "--sort-latency-us" && i + 1 < argc)
+                config.sort_latency_us = static_cast<std::int64_t>(sim::parse_u64(argv[++i], "--sort-latency-us"));
+            else if (arg == "--sort-interval-us" && i + 1 < argc)
+                config.sort_interval_us = static_cast<std::int64_t>(sim::parse_u64(argv[++i], "--sort-interval-us"));
             else if (arg == "--help" || arg == "-h")
             {
                 std::cerr << "Usage: " << argv[0]
                           << " (--input <trace.csv> | --socket <port>)"
-                          << " [--link-bps N] [--buffer-bytes N]\n";
+                          << " [--link-bps N] [--buffer-bytes N]"
+                          << " [--sort-latency-us N] [--sort-interval-us N]\n";
                 return 0;
             }
         }

@@ -9,6 +9,20 @@ LINK_BPS  ?= 40000000000
 
 BUFFER_BYTES ?= 52428800
 
+# Sort-latency model: represents AQM sort processing time on target hardware.
+# The wave jitter window is 20 µs (max_start_offset_us). Any engine whose
+# sort_latency_us > 20 µs cannot finish sorting before all wave packets arrive,
+# so its eviction decisions are always stale → same drop rate as FIFO.
+# GPU sort at ~5 µs finishes mid-wave; 75 % of arrivals are post-sort and
+# benefit from preemptive eviction → 0 % control drops.
+#
+# Values calibrated to target hardware (40 Gbps switch):
+#   CPU: ARM switch CPU sorting ~30 K keys  → ~25 µs  (> 20 µs wave spread → blind)
+#   GPU: GPU co-processor, ~5× faster       → ~5 µs   (< 20 µs wave spread → sees 75 %)
+CPU_SORT_LATENCY_US  ?= 25
+GPU_SORT_LATENCY_US  ?= 5
+SORT_INTERVAL_US     ?= 9000
+
 BUILD_DIR        := build
 TRACE_DIR        := data/traces
 
@@ -72,19 +86,23 @@ run-cpu-fifo: $(CPU_FIFO_BIN) $(TRACE_PATH)
 	$(CPU_FIFO_BIN) --input "$(TRACE_PATH)" --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
 
 run-cpu-priority-queue: $(CPU_PQ_BIN) $(TRACE_PATH)
-	$(CPU_PQ_BIN) --input "$(TRACE_PATH)" --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
+	$(CPU_PQ_BIN) --input "$(TRACE_PATH)" --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) \
+	  --sort-latency-us $(CPU_SORT_LATENCY_US) --sort-interval-us $(SORT_INTERVAL_US)
 
 run-gpu-priority-queue: $(GPU_PQ_BIN) $(TRACE_PATH)
-	$(GPU_PQ_BIN) --input "$(TRACE_PATH)" --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
+	$(GPU_PQ_BIN) --input "$(TRACE_PATH)" --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) \
+	  --sort-latency-us $(GPU_SORT_LATENCY_US) --sort-interval-us $(SORT_INTERVAL_US)
 
 run-cpu-fifo-socket: $(CPU_FIFO_BIN)
 	$(CPU_FIFO_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
 
 run-cpu-priority-queue-socket: $(CPU_PQ_BIN)
-	$(CPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
+	$(CPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) \
+	  --sort-latency-us $(CPU_SORT_LATENCY_US) --sort-interval-us $(SORT_INTERVAL_US)
 
 run-gpu-priority-queue-socket: $(GPU_PQ_BIN)
-	$(GPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
+	$(GPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) \
+	  --sort-latency-us $(GPU_SORT_LATENCY_US) --sort-interval-us $(SORT_INTERVAL_US)
 
 run-cpu-fifo-ns3: $(CPU_FIFO_BIN)
 	$(CPU_FIFO_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) & \
@@ -93,13 +111,15 @@ run-cpu-fifo-ns3: $(CPU_FIFO_BIN)
 	  --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
 
 run-cpu-priority-queue-ns3: $(CPU_PQ_BIN)
-	$(CPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) & \
+	$(CPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) \
+	  --sort-latency-us $(CPU_SORT_LATENCY_US) --sort-interval-us $(SORT_INTERVAL_US) & \
 	sleep 0.5 && PYTHONPATH=. $(PYTHON) -m traffic.ns3_incast \
 	  --scenario $(SCENARIO) --port $(SOCKET_PORT) \
 	  --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
 
 run-gpu-priority-queue-ns3: $(GPU_PQ_BIN)
-	$(GPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) & \
+	$(GPU_PQ_BIN) --socket $(SOCKET_PORT) --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES) \
+	  --sort-latency-us $(GPU_SORT_LATENCY_US) --sort-interval-us $(SORT_INTERVAL_US) & \
 	sleep 0.5 && PYTHONPATH=. $(PYTHON) -m traffic.ns3_incast \
 	  --scenario $(SCENARIO) --port $(SOCKET_PORT) \
 	  --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
