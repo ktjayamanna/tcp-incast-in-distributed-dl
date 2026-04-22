@@ -811,7 +811,7 @@
       "updated": 1776818898127,
       "link": null,
       "locked": false,
-      "text": "PCAP Capture at Receiver\n(TCP data segments only, parsed timestamps)",
+      "text": "PCAP on Aggregator Access Links\n(pre-bottleneck — captures raw incast burst, ns3 simulation timestamps)",
       "fontSize": 12,
       "fontFamily": 2,
       "textAlign": "center",

@@ -107,12 +107,21 @@ Packet SocketPacketSource::next()
         throw std::runtime_error("malformed packet line: missing traffic_class");
     const TrafficClass tc = (tok == "control") ? TrafficClass::Control : TrafficClass::Bulk;
 
-    if (!std::getline(ss, tok))
+    if (!std::getline(ss, tok, ','))
         throw std::runtime_error("malformed packet line: missing priority_tag");
     const auto priority_tag = static_cast<std::uint8_t>(std::stoul(tok));
 
+    // Optional 4th field: ns3 simulation timestamp in microseconds.
+    // When present, use it as arrival_time_us so the engine operates on
+    // simulation time rather than wall-clock time.  This is required for
+    // correct burst semantics: ns3 captures traffic pre-bottleneck at
+    // simulation timescale; wall-clock replay timing is too coarse.
+    std::int64_t arrival_us = now_us();
+    if (std::getline(ss, tok) && !tok.empty())
+        arrival_us = static_cast<std::int64_t>(std::stoull(tok));
+
     Packet pkt;
-    pkt.arrival_time_us    = now_us();
+    pkt.arrival_time_us    = arrival_us;
     pkt.packet_size_bytes  = size_bytes;
     pkt.traffic_class      = tc;
     pkt.priority_tag       = priority_tag;

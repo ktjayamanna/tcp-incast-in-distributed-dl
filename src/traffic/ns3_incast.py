@@ -5,12 +5,19 @@ Usage:
 
 ns3 models real TCP congestion control (NewReno by default), so packet timing and
 sizes reflect actual TCP dynamics — slow start, congestion avoidance, retransmits —
-rather than the synthetic fixed-size bursts of the Python generator.
+rather than synthetic fixed-size bursts.
 
-The simulation runs to completion first, then replays the collected packet arrivals
-over the socket at their original inter-packet timing (same replay pattern as
-socket_sender.py). The C++ engine's SocketPacketSource stamps each received packet
-with wall-clock time on arrival.
+Capture point: PCAP on the AGGREGATOR side of the sender→aggregator access links,
+BEFORE packets enter the bottleneck DropTailQueue.  This gives the engine the raw
+incast burst at ns3 simulation timescale, so the engine's buffer actually fills and
+drop policy matters.
+
+Capturing at the receiver (post-bottleneck PCAP) would give traffic already
+rate-limited to 45 Gbps; the engine's 45 Gbps link would keep up perfectly and
+no drops would occur.
+
+The ns3 simulation timestamp (microseconds) is included in the wire format so
+the C++ engine uses it as arrival_time_us instead of wall-clock time.
 """
 from __future__ import annotations
 
@@ -22,7 +29,6 @@ import socket
 import struct
 import sys
 import tempfile
-import time
 from typing import Iterator
 
 from .config import ScenarioName, TrafficConfig, get_scenario
@@ -68,64 +74,58 @@ def _load_ns3():
 # PCAP parser
 # ---------------------------------------------------------------------------
 
-def _iter_pcap_tcp_data(path: str) -> Iterator[tuple[int, int, str]]:
-    """Yield (timestamp_us, ip_total_bytes, src_ip) for TCP segments carrying data.
+# ns3 PointToPoint PCAP uses DLT_PPP (link type 9).
+# ns3 omits the PPP address (0xff) and control (0x03) bytes, so the frame
+# is just 2-byte protocol field (0x00 0x21 for IPv4) followed by the IP packet.
+_PPP_HDR = 2
+_IP_SRC_OFF = 12   # byte offset of source IP inside IP header
+_IP_TOT_OFF = 2    # byte offset of total-length field inside IP header
+_TCP_DATA_OFF = 32  # minimum IP+TCP header (20+20) — used as floor for payload check
 
-    Handles both Ethernet (DLT=1) and PPP (DLT=9) link layers.
-    ns3 PointToPoint devices use PPP encapsulation.
-    """
+
+def _iter_pcap_tcp_data(path: str) -> Iterator[tuple[int, int, str]]:
+    """Yield (ts_us, ip_total_bytes, src_ip_str) for each TCP data packet in a PCAP."""
     with open(path, "rb") as f:
-        header = f.read(24)
-        if len(header) < 24:
-            return
-        magic, _vmaj, _vmin, _zone, _sigfigs, _snaplen, link_type = struct.unpack_from(
-            "<IHHiIII", header
-        )
-        # 0xa1b2c3d4 = microsecond timestamps, 0xa1b23c4d = nanosecond
-        ts_divisor = 1000 if magic == 0xa1b23c4d else 1
+        magic = struct.unpack_from("<I", f.read(4))[0]
+        if magic == 0xA1B2C3D4:
+            endian = "<"
+        elif magic == 0xD4C3B2A1:
+            endian = ">"
+        else:
+            return  # unrecognised magic — skip file
+
+        # global header: magic(4) ver_maj(2) ver_min(2) thiszone(4) sigfigs(4) snaplen(4) network(4)
+        f.seek(24)
 
         while True:
-            rec = f.read(16)
-            if len(rec) < 16:
+            rec_hdr = f.read(16)
+            if len(rec_hdr) < 16:
                 break
-            ts_sec, ts_sub, incl_len, _orig_len = struct.unpack_from("<IIII", rec)
-            frame = f.read(incl_len)
-            ts_us = ts_sec * 1_000_000 + ts_sub // ts_divisor
+            ts_sec, ts_usec, incl_len, _ = struct.unpack_from(endian + "IIII", rec_hdr)
+            payload = f.read(incl_len)
+            if len(payload) < incl_len:
+                break
 
-            # Determine where IP header starts based on link layer type
-            if link_type == 1:
-                # Ethernet: 14-byte header, check EtherType
-                if len(frame) < 34:
-                    continue
-                if struct.unpack_from("!H", frame, 12)[0] != 0x0800:
-                    continue
-                ip_off = 14
-            elif link_type == 9:
-                # PPP: 2-byte protocol field (0x0021 = IPv4)
-                if len(frame) < 4:
-                    continue
-                if struct.unpack_from("!H", frame, 0)[0] != 0x0021:
-                    continue
-                ip_off = 2
-            else:
+            ts_us = ts_sec * 1_000_000 + ts_usec
+
+            # Strip PPP header
+            if len(payload) < _PPP_HDR:
                 continue
+            ip = payload[_PPP_HDR:]
 
-            ip_ihl = (frame[ip_off] & 0x0F) * 4
-            ip_total = struct.unpack_from("!H", frame, ip_off + 2)[0]
-            ip_proto = frame[ip_off + 9]
-            src_ip = socket.inet_ntoa(frame[ip_off + 12 : ip_off + 16])
+            if len(ip) < 20:
+                continue  # too short for IP header
 
-            if ip_proto != 6:  # TCP only
-                continue
+            ip_total = struct.unpack_from("!H", ip, _IP_TOT_OFF)[0]
+            if ip_total <= _TCP_DATA_OFF:
+                continue  # no TCP payload (SYN/ACK/FIN)
 
-            tcp_off = ip_off + ip_ihl
-            if tcp_off + 13 >= len(frame):
-                continue
-            tcp_data_offset = ((frame[tcp_off + 12] >> 4) * 4)
-            tcp_payload_len = ip_total - ip_ihl - tcp_data_offset
+            protocol = ip[9]
+            if protocol != 6:
+                continue  # not TCP
 
-            if tcp_payload_len <= 0:  # skip SYN / ACK-only / FIN
-                continue
+            src_bytes = ip[_IP_SRC_OFF:_IP_SRC_OFF + 4]
+            src_ip = "{}.{}.{}.{}".format(*src_bytes)
 
             yield ts_us, ip_total, src_ip
 
@@ -230,11 +230,15 @@ def _simulate(
             apps.Start(ns.MicroSeconds(start_us))
             apps.Stop(ns.Seconds(sim_end_s + 1.0))
 
-    # Capture packets arriving at receiver via the bottleneck link
+    # Capture on the AGGREGATOR side of each sender→aggregator access link.
+    # These PCAPs fire BEFORE the bottleneck DropTailQueue, so the engine sees
+    # the raw incast burst.  ns3 PCAP timestamps are simulation-time microseconds,
+    # used as arrival_time_us in the wire format so the engine operates on
+    # simulation timescale — no wall-clock sleep needed.
     tmpdir = tempfile.mkdtemp(prefix="ns3_incast_")
-    rcvr_nc = ns.NodeContainer()
-    rcvr_nc.Add(rcvr)
-    bottle.EnablePcap(os.path.join(tmpdir, "rx"), rcvr_nc)
+    agg_nc = ns.NodeContainer()
+    agg_nc.Add(agg)
+    access.EnablePcap(os.path.join(tmpdir, "burst"), agg_nc)
 
     print(
         f"Running ns3 simulation: {n} senders × {config.number_of_waves} waves "
@@ -244,14 +248,24 @@ def _simulate(
     ns.Simulator.Run()
     ns.Simulator.Destroy()
 
-    # Parse PCAP
-    packets: list[tuple[int, int, str]] = []
-    for pcap in globmod.glob(os.path.join(tmpdir, "rx*.pcap")):
-        packets.extend(_iter_pcap_tcp_data(pcap))
-    packets.sort()
+    # Parse per-sender PCAP files and merge by simulation timestamp.
+    # access.EnablePcap also captures the aggregator's bottleneck-facing device
+    # (device index n+1, post-DropTailQueue) — exclude it to avoid duplicates.
+    # Access link devices are 1..n on aggregator node n; bottleneck is n+1.
+    sender_ips_set = set(sender_ips.values())
+    agg_node_id = n
+    bottleneck_pcap = os.path.join(tmpdir, f"burst-{agg_node_id}-{n + 1}.pcap")
+    pre_queue: list[tuple[int, int, str]] = []
+    for pcap in globmod.glob(os.path.join(tmpdir, "burst-*.pcap")):
+        if os.path.abspath(pcap) == os.path.abspath(bottleneck_pcap):
+            continue  # post-bottleneck — skip to avoid counting packets twice
+        for ts_us, ip_total, src_ip in _iter_pcap_tcp_data(pcap):
+            if src_ip in sender_ips_set:
+                pre_queue.append((ts_us, ip_total, src_ip))
 
-    print(f"Simulation done: {len(packets)} TCP data packets captured.")
-    return packets, control_ips
+    pre_queue.sort()
+    print(f"Simulation done: {len(pre_queue)} TCP data packets captured (pre-bottleneck).")
+    return pre_queue, control_ips
 
 
 # ---------------------------------------------------------------------------
@@ -274,20 +288,17 @@ def send(
 
     with socket.create_connection((host, port)) as conn:
         print(f"Connected to {host}:{port} — replaying {len(packets)} packets")
-        prev_us = packets[0][0]
 
         for ts_us, ip_total, src_ip in packets:
-            gap_us = ts_us - prev_us
-            if gap_us > 0:
-                time.sleep(gap_us / 1_000_000)
-            prev_us = ts_us
-
             if src_ip in control_ips:
                 tc, tag = "control", config.control_priority_tag
             else:
                 tc, tag = "bulk", config.bulk_priority_tag
 
-            conn.sendall(f"{ip_total},{tc},{tag}\n".encode())
+            # ts_us is the ns3 simulation timestamp; the engine uses it as
+            # arrival_time_us so simulation operates on ns3 timescale, not
+            # wall-clock time.  No sleep needed — correctness is driven by ts_us.
+            conn.sendall(f"{ip_total},{tc},{tag},{ts_us}\n".encode())
 
     print("All packets sent.")
 
