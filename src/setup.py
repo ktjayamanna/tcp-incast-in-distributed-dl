@@ -10,10 +10,6 @@ setup(
         exclude=["traffic.tests", "traffic.tests.*", "traffic.data", "traffic.data.*"],
     ),
     include_package_data=True,
-    install_requires=[
-        "numpy",
-        "matplotlib",
-        "openpyxl",
-    ],
+    install_requires=[],
     python_requires=">=3.8",
 )
