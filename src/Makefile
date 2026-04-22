@@ -70,11 +70,11 @@ run-gpu-priority-queue: $(GPU_PQ_BIN)
 	  --link-bps $(LINK_BPS) --buffer-bytes $(BUFFER_BYTES)
 
 # compare: CPU PQ vs GPU PQ side by side, terminal output.
+# Buffer size is chosen per-scenario by compare.py; override with BUFFER_BYTES=.
 compare: $(CPU_PQ_BIN) $(GPU_PQ_BIN)
 	PYTHONPATH=. \
 	SCENARIO=$(COMPARE_SCENARIO) \
 	LINK_BPS=$(LINK_BPS) \
-	BUFFER_BYTES=$(BUFFER_BYTES) \
 	SORT_INTERVAL_US=$(SORT_INTERVAL_US) \
 	SOCKET_PORT=$(SOCKET_PORT) \
 	$(PYTHON) scripts/compare.py

@@ -4,10 +4,10 @@
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/sort.h>
-#include <chrono>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace sim::gpu_priority_queue
 {
@@ -48,6 +48,26 @@ GpuSorter::GpuSorter(int max_batch_size)
         cuda_check(cudaEventCreate(&sl.ev_d2h_start),  "ev_d2h_start");
         cuda_check(cudaEventCreate(&sl.ev_d2h_end),    "ev_d2h_end");
     }
+
+    // Warm-up: force CUDA JIT kernel compilation and warm the Thrust temp
+    // allocator for each pipeline slot.  Without this, the first real sort
+    // on each slot pays 1-10 ms of one-time driver/JIT overhead that inflates
+    // the measured blind window.  We sort at kMaxSortCapacity so the allocator
+    // caches a buffer large enough for any subsequent real sort.
+    {
+        const int n = capacity_;
+        std::vector<std::uint64_t> wk(static_cast<std::size_t>(n));
+        std::vector<std::uint32_t> wi(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i)
+            wk[i] = static_cast<std::uint64_t>(n - i);
+
+        for (int s = 0; s < kPipelineDepth; ++s)
+        {
+            submit_async(s, wk.data(), n);
+            SlotTiming t{};
+            collect_with_timing(s, wi.data(), n, t);
+        }
+    }
 }
 
 GpuSorter::~GpuSorter()
@@ -55,7 +75,6 @@ GpuSorter::~GpuSorter()
     for (int s = 0; s < kPipelineDepth; ++s)
     {
         Slot& sl = slots_[s];
-        // Drain before freeing so in-flight work doesn't write freed memory.
         if (sl.stream) cudaStreamSynchronize(sl.stream);
 
         cudaEventDestroy(sl.ev_h2d_start);
@@ -82,10 +101,8 @@ GpuSorter::~GpuSorter()
 //   3. thrust::sort_by_key on stream          (SM compute)
 //   4. cudaMemcpyAsync  d_indices → h_indices (D2H, PCIe)
 //
-// Because all four are on the same per-slot stream they execute in order on
-// the GPU side, but the CPU returns before any of them start.  Three slots
-// with three independent streams let the GPU and PCIe bus overlap all three
-// phases across consecutive waves.
+// The Thrust temp allocator caches its workspace across calls of the same
+// size (pre-warmed at construction), so no dynamic cudaMalloc occurs here.
 void GpuSorter::submit_async(int slot, const std::uint64_t* keys, int n)
 {
     if (n <= 0 || n > capacity_)
@@ -93,14 +110,13 @@ void GpuSorter::submit_async(int slot, const std::uint64_t* keys, int n)
 
     Slot& sl = slots_[slot];
 
-    // Fill pinned host buffers (CPU writes to WC/pinned memory — fast).
     for (int i = 0; i < n; ++i)
     {
         sl.h_keys[i]    = keys[i];
-        sl.h_indices[i] = static_cast<std::uint32_t>(i);  // iota for sort-by-key
+        sl.h_indices[i] = static_cast<std::uint32_t>(i);
     }
 
-    // H2D — non-blocking for CPU, queued on sl.stream.
+    // H2D
     cudaEventRecord(sl.ev_h2d_start, sl.stream);
     cuda_check(
         cudaMemcpyAsync(sl.d_keys, sl.h_keys,
@@ -123,7 +139,7 @@ void GpuSorter::submit_async(int slot, const std::uint64_t* keys, int n)
         thrust::device_ptr<std::uint32_t>(sl.d_indices));
     cudaEventRecord(sl.ev_kern_end, sl.stream);
 
-    // D2H sorted indices — non-blocking for CPU, queued on sl.stream.
+    // D2H sorted indices
     cudaEventRecord(sl.ev_d2h_start, sl.stream);
     cuda_check(
         cudaMemcpyAsync(sl.h_indices, sl.d_indices,
@@ -131,8 +147,6 @@ void GpuSorter::submit_async(int slot, const std::uint64_t* keys, int n)
                         cudaMemcpyDeviceToHost, sl.stream),
         "async D2H indices");
     cudaEventRecord(sl.ev_d2h_end, sl.stream);
-
-    // CPU returns here.  GPU/PCIe continues asynchronously.
 }
 
 bool GpuSorter::poll_ready(int slot) const
@@ -143,7 +157,6 @@ bool GpuSorter::poll_ready(int slot) const
 void GpuSorter::collect(int slot, std::uint32_t* out_indices, int n)
 {
     Slot& sl = slots_[slot];
-    // If poll_ready() already returned true this is an instant no-op.
     cuda_check(cudaStreamSynchronize(sl.stream), "cudaStreamSynchronize");
     for (int i = 0; i < n; ++i)
         out_indices[i] = sl.h_indices[i];
@@ -162,72 +175,6 @@ void GpuSorter::collect_with_timing(int slot, std::uint32_t* out_indices,
 
     for (int i = 0; i < n; ++i)
         out_indices[i] = sl.h_indices[i];
-}
-
-// ── Legacy synchronous API ───────────────────────────────────────────────────
-
-void GpuSorter::sort(
-    const std::uint64_t* sort_keys,
-    std::uint32_t*       out_indices,
-    int                  n,
-    SortTiming*          timing)
-{
-    if (n <= 0) return;
-    if (n > capacity_)
-        throw std::runtime_error("GpuSorter: batch size exceeds allocated capacity");
-
-    const auto wall_start = std::chrono::steady_clock::now();
-
-    // Legacy path reuses slot 0 with synchronous memcpy.
-    Slot& sl = slots_[0];
-
-    cudaEvent_t ev_h2d_start, ev_h2d_end, ev_kern_start, ev_kern_end, ev_d2h_start, ev_d2h_end;
-    if (timing)
-    {
-        cudaEventCreate(&ev_h2d_start);  cudaEventCreate(&ev_h2d_end);
-        cudaEventCreate(&ev_kern_start); cudaEventCreate(&ev_kern_end);
-        cudaEventCreate(&ev_d2h_start);  cudaEventCreate(&ev_d2h_end);
-    }
-
-    for (int i = 0; i < n; i++)
-    {
-        sl.h_keys[i]    = sort_keys[i];
-        sl.h_indices[i] = static_cast<std::uint32_t>(i);
-    }
-
-    if (timing) cudaEventRecord(ev_h2d_start);
-    cuda_check(cudaMemcpy(sl.d_keys,    sl.h_keys,    n * sizeof(std::uint64_t), cudaMemcpyHostToDevice), "H2D keys");
-    cuda_check(cudaMemcpy(sl.d_indices, sl.h_indices, n * sizeof(std::uint32_t), cudaMemcpyHostToDevice), "H2D indices");
-    if (timing) cudaEventRecord(ev_h2d_end);
-
-    if (timing) cudaEventRecord(ev_kern_start);
-    thrust::sort_by_key(
-        thrust::device_ptr<std::uint64_t>(sl.d_keys),
-        thrust::device_ptr<std::uint64_t>(sl.d_keys + n),
-        thrust::device_ptr<std::uint32_t>(sl.d_indices));
-    if (timing) cudaEventRecord(ev_kern_end);
-    cuda_check(cudaDeviceSynchronize(), "thrust sort sync");
-
-    if (timing) cudaEventRecord(ev_d2h_start);
-    cuda_check(cudaMemcpy(sl.h_indices, sl.d_indices, n * sizeof(std::uint32_t), cudaMemcpyDeviceToHost), "D2H indices");
-    if (timing) cudaEventRecord(ev_d2h_end);
-
-    for (int i = 0; i < n; i++)
-        out_indices[i] = sl.h_indices[i];
-
-    if (timing)
-    {
-        cudaEventSynchronize(ev_d2h_end);
-        cudaEventElapsedTime(&timing->h2d_ms,    ev_h2d_start,  ev_h2d_end);
-        cudaEventElapsedTime(&timing->kernel_ms, ev_kern_start, ev_kern_end);
-        cudaEventElapsedTime(&timing->d2h_ms,    ev_d2h_start,  ev_d2h_end);
-        const auto wall_end = std::chrono::steady_clock::now();
-        timing->wall_ms = static_cast<float>(
-            std::chrono::duration<double, std::milli>(wall_end - wall_start).count());
-        cudaEventDestroy(ev_h2d_start);  cudaEventDestroy(ev_h2d_end);
-        cudaEventDestroy(ev_kern_start); cudaEventDestroy(ev_kern_end);
-        cudaEventDestroy(ev_d2h_start);  cudaEventDestroy(ev_d2h_end);
-    }
 }
 
 } // namespace sim::gpu_priority_queue

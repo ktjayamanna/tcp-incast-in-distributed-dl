@@ -44,30 +44,27 @@ int main(int argc, char **argv)
         const auto                         result = engine.run(source);
         sim::print_stats(result.sim);
 
-        const auto  &gpu                = result.gpu;
-        const double avg_n              = gpu.sort_calls ? static_cast<double>(gpu.total_packets_sorted) / gpu.sort_calls : 0.0;
-        const double speedup            = gpu.total_gpu_wall_ms > 0.0 ? gpu.total_cpu_sort_ms / gpu.total_gpu_wall_ms : 0.0;
-        const double avg_kernel_us      = gpu.sort_epochs ? gpu.total_epoch_kernel_us / gpu.sort_epochs : 0.0;
-        const double pipeline_eff       = gpu.total_gpu_wall_ms > 0.0
+        const auto  &gpu           = result.gpu;
+        const double avg_batch     = gpu.sort_epochs ? static_cast<double>(gpu.total_packets_sorted) / gpu.sort_epochs : 0.0;
+        const double avg_kernel_us = gpu.sort_epochs ? gpu.total_epoch_kernel_us / gpu.sort_epochs : 0.0;
+        const double pipeline_eff  = gpu.total_gpu_wall_ms > 0.0
             ? (gpu.total_h2d_ms + gpu.total_kernel_ms + gpu.total_d2h_ms) / gpu.total_gpu_wall_ms : 0.0;
-        const double gpu_kernel_util    = gpu.total_gpu_wall_ms > 0.0
+        const double kernel_util   = gpu.total_gpu_wall_ms > 0.0
             ? gpu.total_kernel_ms / gpu.total_gpu_wall_ms * 100.0 : 0.0;
-        const double gpu_sort_active    = gpu.total_sim_wall_ms > 0.0
+        const double sort_active   = gpu.total_sim_wall_ms > 0.0
             ? gpu.total_gpu_wall_ms / gpu.total_sim_wall_ms * 100.0 : 0.0;
-        std::cout << "gpu_sort_calls="         << gpu.sort_calls        << '\n';
-        std::cout << "gpu_avg_batch="          << avg_n                 << '\n';
-        std::cout << "gpu_h2d_ms="             << gpu.total_h2d_ms      << '\n';
-        std::cout << "gpu_kernel_ms="          << gpu.total_kernel_ms   << '\n';
-        std::cout << "gpu_d2h_ms="             << gpu.total_d2h_ms      << '\n';
-        std::cout << "gpu_wall_ms="            << gpu.total_gpu_wall_ms << '\n';
-        std::cout << "cpu_sort_ms="            << gpu.total_cpu_sort_ms << '\n';
-        std::cout << "gpu_vs_cpu_speedup="     << speedup               << '\n';
-        std::cout << "sort_epochs="            << gpu.sort_epochs       << '\n';
-        std::cout << "sort_latency_avg_us="    << avg_kernel_us         << '\n';
-        std::cout << "pipeline_efficiency="    << pipeline_eff          << '\n';
-        std::cout << "gpu_kernel_util_pct="    << gpu_kernel_util       << '\n';
-        std::cout << "gpu_sort_active_pct="    << gpu_sort_active       << '\n';
-        std::cout << "sim_wall_ms="            << gpu.total_sim_wall_ms << '\n';
+
+        std::cout << "sort_epochs="         << gpu.sort_epochs          << '\n';
+        std::cout << "gpu_avg_batch="       << avg_batch                << '\n';
+        std::cout << "gpu_h2d_ms="          << gpu.total_h2d_ms         << '\n';
+        std::cout << "gpu_kernel_ms="       << gpu.total_kernel_ms      << '\n';
+        std::cout << "gpu_d2h_ms="          << gpu.total_d2h_ms         << '\n';
+        std::cout << "gpu_wall_ms="         << gpu.total_gpu_wall_ms    << '\n';
+        std::cout << "sort_latency_avg_us=" << avg_kernel_us            << '\n';
+        std::cout << "pipeline_efficiency=" << pipeline_eff             << '\n';
+        std::cout << "gpu_kernel_util_pct=" << kernel_util              << '\n';
+        std::cout << "gpu_sort_active_pct=" << sort_active              << '\n';
+        std::cout << "sim_wall_ms="         << gpu.total_sim_wall_ms    << '\n';
         return 0;
     }
     catch (const std::exception &ex)

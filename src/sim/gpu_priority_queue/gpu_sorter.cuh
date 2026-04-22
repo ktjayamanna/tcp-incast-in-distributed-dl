@@ -13,16 +13,7 @@ static constexpr int kMaxSortCapacity = 131072;
 // in flight simultaneously across different slots).
 static constexpr int kPipelineDepth = 3;
 
-// Per-call timing breakdown from GpuSorter::sort() (legacy synchronous API).
-struct SortTiming
-{
-    float h2d_ms    = 0.f;
-    float kernel_ms = 0.f;
-    float d2h_ms    = 0.f;
-    float wall_ms   = 0.f;
-};
-
-// Per-slot timing returned by collect_with_timing() (pipelined async API).
+// Per-slot timing returned by collect_with_timing().
 // Times are measured by CUDA events recorded on the slot's stream, so they
 // reflect true GPU-side execution even when the CPU is doing other work.
 struct SlotTiming
@@ -33,17 +24,12 @@ struct SlotTiming
     float wall_ms   = 0.f;  // h2d_start → d2h_end, GPU side
 };
 
-// Triple-buffered sort engine.
+// Triple-buffered GPU radix sort engine.
 //
-// Each of the kPipelineDepth slots owns:
-//   • a dedicated CUDA stream
-//   • its own device buffers (d_keys_, d_indices_)
-//   • its own pinned host buffers (h_keys_, h_indices_)
-//
-// This lets three operations proceed concurrently on the PCIe bus / SM:
-//   slot N   : H2D transfer   (load wave N to GPU)
-//   slot N-1 : radix sort     (compute wave N-1)
-//   slot N-2 : D2H transfer   (move wave N-2 results back to CPU)
+// Three independent CUDA streams allow consecutive epoch sorts to overlap:
+//   slot N   : H2D transfer   (load epoch N keys to GPU)
+//   slot N-1 : radix sort     (compute epoch N-1)
+//   slot N-2 : D2H transfer   (retrieve epoch N-2 results)
 //
 // Sort key convention: smaller key = higher scheduling priority.
 //   key = ((uint64_t)(255 - priority_tag) << 32) | (uint64_t)sequence
@@ -74,13 +60,6 @@ public:
     // Collect variant that also returns per-phase GPU timing.
     void collect_with_timing(int slot, std::uint32_t* out_indices, int n,
                              SlotTiming& timing);
-
-    // ── Legacy synchronous API (kept for benchmark comparisons) ───────────
-
-    void sort(const std::uint64_t* sort_keys,
-              std::uint32_t*       out_indices,
-              int                  n,
-              SortTiming*          timing = nullptr);
 
     int capacity() const { return capacity_; }
 

@@ -19,19 +19,13 @@ using sim::cpu_fifo::validate_config_or_throw;
 // Accumulated GPU sort timing across the entire simulation run.
 struct GpuSortStats
 {
-    std::uint64_t sort_calls            = 0;
+    std::uint64_t sort_epochs           = 0;
     std::uint64_t total_packets_sorted  = 0;
     double        total_h2d_ms          = 0.0;
     double        total_kernel_ms       = 0.0;
     double        total_d2h_ms          = 0.0;
     double        total_gpu_wall_ms     = 0.0;
-    double        total_cpu_sort_ms     = 0.0;  // equivalent std::sort on same batches
-
-    // Epoch-level kernel timing (used as measured blind window).
-    std::uint64_t sort_epochs           = 0;
     double        total_epoch_kernel_us = 0.0;
-
-    // Total simulation wall time (engine.run() duration).
     double        total_sim_wall_ms     = 0.0;
 };
 

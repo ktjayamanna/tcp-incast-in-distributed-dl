@@ -42,19 +42,10 @@ CpuPqSimStats Engine::run(PacketSource &source)
     std::uint32_t sequence     = 0;
     std::int64_t  link_free_us = 0;
 
-    std::int64_t  sort_free_us        = 0;
-    std::int64_t  next_sort_epoch_us  = 0;
-    std::uint32_t evict_candidate_seq = std::numeric_limits<std::uint32_t>::max();
+    std::int64_t sort_free_us       = 0;
+    std::int64_t next_sort_epoch_us = 0;
+    bool         epoch_sorted       = false;
 
-    // epoch_sorted: true when sorted_indices is valid for the current pending[]
-    // contents at the epoch boundary.  Set false when pending grows (new arrivals
-    // or eviction deletes an entry and the indices become stale).
-    bool epoch_sorted = false;
-
-    // sort_at_epoch: runs std::sort and refreshes sort_free_us / evict_candidate.
-    // Called only when a new sort epoch starts, not on every packet arrival.
-    // This makes the simulation O(n log n) per epoch vs O(n² log n) in the naive
-    // per-arrival approach, without changing the simulated blind-window semantics.
     auto sort_at_epoch = [&](std::int64_t epoch_us)
     {
         const int n = static_cast<int>(pending.size());
@@ -72,37 +63,22 @@ CpuPqSimStats Engine::run(PacketSource &source)
         const double measured_us = std::chrono::duration<double, std::micro>(
             std::chrono::steady_clock::now() - t0).count();
 
-        sort_stats.sort_epochs    += 1;
-        sort_stats.total_sort_us  += measured_us;
+        sort_stats.sort_epochs   += 1;
+        sort_stats.total_sort_us += measured_us;
 
-        // Use measured std::sort time as the blind window (how long the CPU
-        // was occupied sorting before eviction decisions could be made).
-        // If a manual override was provided via --sort-latency-us, honour it.
         const std::int64_t latency_us = (config_.sort_latency_us > 0)
             ? config_.sort_latency_us
             : static_cast<std::int64_t>(measured_us);
 
         sort_free_us       = epoch_us + latency_us;
         next_sort_epoch_us = epoch_us + std::max(config_.sort_interval_us, latency_us);
-
-        evict_candidate_seq = std::numeric_limits<std::uint32_t>::max();
-        for (int i = static_cast<int>(n) - 1; i >= 0; --i)
-        {
-            if (pending[sorted_indices[i]].packet.traffic_class == TrafficClass::Bulk)
-            {
-                evict_candidate_seq = pending[sorted_indices[i]].sequence;
-                break;
-            }
-        }
-
-        epoch_sorted = true;
+        epoch_sorted       = true;
     };
 
     auto drain_until = [&](std::int64_t limit_us)
     {
         if (pending.empty()) return;
 
-        // Sort only at epoch boundaries (or every call when sort_interval_us == 0).
         const bool new_epoch = (config_.sort_interval_us == 0) ||
                                (limit_us >= next_sort_epoch_us);
         if (new_epoch)
@@ -112,9 +88,6 @@ CpuPqSimStats Engine::run(PacketSource &source)
 
         if (epoch_sorted)
         {
-            // Drain in priority order using the epoch sort result.
-            // sorted_indices may reference entries appended after the sort;
-            // guard with an index-bounds check.
             std::vector<bool> consumed(static_cast<std::size_t>(n), false);
             for (std::uint32_t idx : sorted_indices)
             {
@@ -131,25 +104,19 @@ CpuPqSimStats Engine::run(PacketSource &source)
                 stats.transmitted_packets += 1;
                 stats.transmitted_bytes   += pkt.packet_size_bytes;
                 auto &cc = class_counters(stats, pkt.traffic_class);
-                cc.transmitted_packets    += 1;
-                cc.transmitted_bytes      += pkt.packet_size_bytes;
+                cc.transmitted_packets += 1;
+                cc.transmitted_bytes   += pkt.packet_size_bytes;
                 record_queue_delay(stats, pkt, start - pkt.arrival_time_us);
-
-                if (pending[idx].sequence == evict_candidate_seq)
-                    evict_candidate_seq = std::numeric_limits<std::uint32_t>::max();
             }
 
             std::vector<PendingEntry> remaining;
             for (int i = 0; i < n; ++i)
                 if (!consumed[i]) remaining.push_back(std::move(pending[i]));
             pending = std::move(remaining);
-            // sorted_indices now refers to old positions — mark stale.
             epoch_sorted = false;
         }
         else
         {
-            // Between epoch sorts, drain in arrival order (FIFO).
-            // Priority ordering resumes at the next epoch boundary.
             std::size_t kept = 0;
             for (int i = 0; i < n; ++i)
             {
@@ -169,12 +136,9 @@ CpuPqSimStats Engine::run(PacketSource &source)
                 stats.transmitted_packets += 1;
                 stats.transmitted_bytes   += pkt.packet_size_bytes;
                 auto &cc = class_counters(stats, pkt.traffic_class);
-                cc.transmitted_packets    += 1;
-                cc.transmitted_bytes      += pkt.packet_size_bytes;
+                cc.transmitted_packets += 1;
+                cc.transmitted_bytes   += pkt.packet_size_bytes;
                 record_queue_delay(stats, pkt, start - pkt.arrival_time_us);
-
-                if (pending[i].sequence == evict_candidate_seq)
-                    evict_candidate_seq = std::numeric_limits<std::uint32_t>::max();
             }
             pending.resize(kept);
         }
@@ -186,44 +150,50 @@ CpuPqSimStats Engine::run(PacketSource &source)
         stats.arrived_packets += 1;
         stats.arrived_bytes   += pkt.packet_size_bytes;
         auto &cc = class_counters(stats, pkt.traffic_class);
-        cc.arrived_packets    += 1;
-        cc.arrived_bytes      += pkt.packet_size_bytes;
+        cc.arrived_packets += 1;
+        cc.arrived_bytes   += pkt.packet_size_bytes;
 
         drain_until(pkt.arrival_time_us);
 
         const bool buffer_full = queued_bytes + pkt.packet_size_bytes > config_.buffer_capacity_bytes;
         const bool sort_ready  = pkt.arrival_time_us >= sort_free_us;
 
-        if (buffer_full && pkt.traffic_class == TrafficClass::Control
-            && sort_ready
-            && evict_candidate_seq != std::numeric_limits<std::uint32_t>::max())
+        if (buffer_full && pkt.traffic_class == TrafficClass::Control && sort_ready)
         {
-            auto it = std::find_if(pending.begin(), pending.end(),
-                [s = evict_candidate_seq](const PendingEntry &e){ return e.sequence == s; });
-
-            if (it == pending.end())
+            // Find the worst-priority bulk to evict: last admitted bulk has the
+            // highest sequence number = largest sort key = correct eviction target.
+            // Scanning backwards is O(n) but fires only when buffer is congested.
+            std::size_t worst = pending.size();
+            for (std::size_t i = pending.size(); i-- > 0; )
             {
-                // Candidate was already drained — invalidate and drop this control packet.
-                evict_candidate_seq = std::numeric_limits<std::uint32_t>::max();
+                if (pending[i].packet.traffic_class == TrafficClass::Bulk)
+                {
+                    worst = i;
+                    break;
+                }
+            }
+
+            if (worst < pending.size())
+            {
+                queued_bytes -= pending[worst].packet.packet_size_bytes;
+                stats.dropped_packets += 1;
+                stats.dropped_bytes   += pending[worst].packet.packet_size_bytes;
+                auto &ec = class_counters(stats, pending[worst].packet.traffic_class);
+                ec.dropped_packets += 1;
+                ec.dropped_bytes   += pending[worst].packet.packet_size_bytes;
+                pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(worst));
+                epoch_sorted = false;
+
+                queued_bytes += pkt.packet_size_bytes;
+                pending.push_back({std::move(pkt), sequence++});
+            }
+            else
+            {
+                // Queue is all control — no bulk to evict, drop incoming.
                 stats.dropped_packets += 1;
                 stats.dropped_bytes   += pkt.packet_size_bytes;
                 cc.dropped_packets    += 1;
                 cc.dropped_bytes      += pkt.packet_size_bytes;
-            }
-            else
-            {
-                queued_bytes -= it->packet.packet_size_bytes;
-                stats.dropped_packets                      += 1;
-                stats.dropped_bytes                        += it->packet.packet_size_bytes;
-                auto &ec = class_counters(stats, it->packet.traffic_class);
-                ec.dropped_packets                         += 1;
-                ec.dropped_bytes                           += it->packet.packet_size_bytes;
-                pending.erase(it);
-                epoch_sorted = false;
-                evict_candidate_seq = std::numeric_limits<std::uint32_t>::max();
-
-                queued_bytes += pkt.packet_size_bytes;
-                pending.push_back({std::move(pkt), sequence++});
             }
         }
         else if (buffer_full)
@@ -236,15 +206,7 @@ CpuPqSimStats Engine::run(PacketSource &source)
         else
         {
             queued_bytes += pkt.packet_size_bytes;
-            const std::uint32_t seq = sequence++;
-            pending.push_back({std::move(pkt), seq});
-            // Track the most recently admitted bulk packet as eviction candidate.
-            // All bulk packets share the same priority tag (DSCP 0), so the
-            // highest sequence = worst priority = correct tail-drop target.
-            // This gives O(1) candidate tracking between epoch sorts, enabling
-            // the swap logic to fire as soon as the blind window expires.
-            if (pending.back().packet.traffic_class == TrafficClass::Bulk)
-                evict_candidate_seq = seq;
+            pending.push_back({std::move(pkt), sequence++});
         }
     }
 

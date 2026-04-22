@@ -64,7 +64,6 @@ def parse_stats(stdout):
         'pipeline_efficiency':  _float(r'^pipeline_efficiency=([0-9.]+)'),
         'gpu_kernel_util_pct':  _float(r'^gpu_kernel_util_pct=([0-9.]+)'),
         'gpu_sort_active_pct':  _float(r'^gpu_sort_active_pct=([0-9.]+)'),
-        'gpu_vs_cpu_speedup':   _float(r'^gpu_vs_cpu_speedup=([0-9.]+)'),
     }
 
 
@@ -73,10 +72,18 @@ def bar(pct, width=20):
     return '█' * filled + '░' * (width - filled)
 
 
+BUFFER_BY_SCENARIO = {
+    'test':   '1048576',    #  1 MB
+    'low':    '52428800',   # 50 MB
+    'medium': '5242880',    #  5 MB
+    'high':   '16777216',   # 16 MB
+}
+
 def main():
     scenario         = os.environ.get('SCENARIO', 'high')
     link_bps         = os.environ.get('LINK_BPS', '45000000000')
-    buffer_bytes     = os.environ.get('BUFFER_BYTES', '52428800')
+    buffer_bytes     = os.environ.get('BUFFER_BYTES',
+                           BUFFER_BY_SCENARIO.get(scenario, '52428800'))
     sort_interval_us = os.environ.get('SORT_INTERVAL_US', '9000')
     base_port        = int(os.environ.get('SOCKET_PORT', '9000'))
 
@@ -181,7 +188,6 @@ def main():
           f'| kernel compute {gpu_stats["gpu_kernel_util_pct"]:.1f}% of GPU active time')
     print(f'          pipeline efficiency {gpu_stats["pipeline_efficiency"]:.2f}x  '
           f'(>1.0 = H2D/kernel/D2H stages overlapping across 3 slots)')
-    print(f'          GPU sort {gpu_stats["gpu_vs_cpu_speedup"]:.1f}x faster than equivalent CPU std::sort')
     print()
 
 

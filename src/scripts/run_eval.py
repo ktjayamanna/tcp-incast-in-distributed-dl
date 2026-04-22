@@ -31,10 +31,10 @@ BASE_PORT        = 9100  # well away from default 9000
 # test uses 1 MB so the buffer fills quickly and forces drops.
 # All others use 50 MB.
 BUFFER_BY_SCENARIO = {
-    'test':   '1048576',    #  1 MB
-    'low':    '131072',     # 128 KB
-    'medium': '5242880',    #  5 MB
-    'high':   '16777216',   # 16 MB
+    'test':   '1048576',    #  1 MB  — congested, drops expected
+    'low':    '52428800',   # 50 MB  — large buffer, 0% drops (baseline)
+    'medium': '5242880',    #  5 MB  — congested, drops expected
+    'high':   '16777216',   # 16 MB  — congested, drops expected
 }
 
 ENGINES = [
@@ -112,13 +112,11 @@ def parse_stats(stdout: str) -> dict[str, Any]:
         'cpu_sort_util_pct':     _float(r'^cpu_sort_util_pct=([0-9.]+)', stdout),
         'sim_wall_ms':           _float(r'^sim_wall_ms=([0-9.]+)', stdout),
         # GPU-specific
-        'gpu_sort_calls':        _int(r'^gpu_sort_calls=(\d+)', stdout),
         'gpu_avg_batch':         _float(r'^gpu_avg_batch=([0-9.]+)', stdout),
         'gpu_h2d_ms':            _float(r'^gpu_h2d_ms=([0-9.]+)', stdout),
         'gpu_kernel_ms':         _float(r'^gpu_kernel_ms=([0-9.]+)', stdout),
         'gpu_d2h_ms':            _float(r'^gpu_d2h_ms=([0-9.]+)', stdout),
         'gpu_wall_ms':           _float(r'^gpu_wall_ms=([0-9.]+)', stdout),
-        'gpu_vs_cpu_speedup':    _float(r'^gpu_vs_cpu_speedup=([0-9.]+)', stdout),
         'pipeline_efficiency':   _float(r'^pipeline_efficiency=([0-9.]+)', stdout),
         'gpu_kernel_util_pct':   _float(r'^gpu_kernel_util_pct=([0-9.]+)', stdout),
         'gpu_sort_active_pct':   _float(r'^gpu_sort_active_pct=([0-9.]+)', stdout),
@@ -275,11 +273,11 @@ def build_gpu_pipeline_sheet(wb, data: dict) -> None:
     ws = wb.create_sheet('GPU Pipeline')
     headers = [
         'Scenario',
-        'Sort Calls', 'Avg Batch Size',
+        'Sort Epochs', 'Avg Batch Size',
         'H2D Total (ms)', 'Kernel Total (ms)', 'D2H Total (ms)',
         'GPU Wall Total (ms)',
         'Pipeline Efficiency', 'GPU Kernel Util %', 'GPU Sort Active % of Sim',
-        'GPU vs CPU Speedup',
+        'GPU vs CPU Sort Speedup',
     ]
     for ci, h in enumerate(headers, 1):
         _hdr(ws, 1, ci, h)
@@ -288,8 +286,14 @@ def build_gpu_pipeline_sheet(wb, data: dict) -> None:
         s = data.get((sc, 'GPU PQ'))
         if not s:
             continue
+        cpu = data.get((sc, 'CPU PQ'))
+        cpu_sort_ms = (cpu['sort_latency_avg_us'] * cpu['sort_epochs'] / 1000.0
+                       if cpu and cpu['sort_epochs'] > 0 else 0.0)
+        gpu_wall = s['gpu_wall_ms'] if s['gpu_wall_ms'] > 0 else None
+        speedup = round(cpu_sort_ms / gpu_wall, 2) if gpu_wall and cpu_sort_ms > 0 else None
+
         ws.cell(row=ri, column=1, value=sc)
-        _val(ws, ri, 2,  s['gpu_sort_calls'])
+        _val(ws, ri, 2,  s['sort_epochs'])
         _val(ws, ri, 3,  round(s['gpu_avg_batch'], 1))
         _val(ws, ri, 4,  round(s['gpu_h2d_ms'], 2))
         _val(ws, ri, 5,  round(s['gpu_kernel_ms'], 2))
@@ -299,7 +303,7 @@ def build_gpu_pipeline_sheet(wb, data: dict) -> None:
         _val(ws, ri, 8,  eff, '0.00', GOOD_FILL if eff > 1.5 else None)
         _val(ws, ri, 9,  round(s['gpu_kernel_util_pct'], 1), '0.0"%"')
         _val(ws, ri, 10, round(s['gpu_sort_active_pct'], 1), '0.0"%"')
-        _val(ws, ri, 11, round(s['gpu_vs_cpu_speedup'], 2), '0.00"x"', GOOD_FILL)
+        _val(ws, ri, 11, speedup, '0.00"x"', GOOD_FILL if speedup and speedup > 1 else None)
     autofit(ws)
 
 
@@ -524,10 +528,16 @@ def write_markdown(data: dict, wall_times: dict, path: str) -> None:
     a('|---|---|---|---|')
     for sc in SCENARIOS:
         gpq = data.get((sc, 'GPU PQ'))
+        cpq = data.get((sc, 'CPU PQ'))
         if gpq:
+            cpu_sort_ms = (cpq['sort_latency_avg_us'] * cpq['sort_epochs'] / 1000.0
+                           if cpq and cpq['sort_epochs'] > 0 else 0.0)
+            gpu_wall = gpq['gpu_wall_ms'] if gpq['gpu_wall_ms'] > 0 else None
+            speedup = cpu_sort_ms / gpu_wall if gpu_wall and cpu_sort_ms > 0 else None
+            speedup_s = f'{speedup:.1f}x' if speedup is not None else 'N/A'
             a(f'| {sc} | {gpq["pipeline_efficiency"]:.2f}x '
               f'| {gpq["gpu_kernel_util_pct"]:.1f}% '
-              f'| {gpq["gpu_vs_cpu_speedup"]:.1f}x |')
+              f'| {speedup_s} |')
     a('')
     a('Pipeline efficiency > 1.0 means the three async CUDA streams (H2D / kernel / D2H) '
       'are overlapping across consecutive sort epochs. A value of 2.0 means the GPU is '
