@@ -29,6 +29,8 @@ Engine::Engine(SimConfig config) : config_(config) { validate_config_or_throw(co
 
 CpuPqSimStats Engine::run(PacketSource &source)
 {
+    const auto sim_wall_start = std::chrono::steady_clock::now();
+
     CpuPqSimStats result{};
     SimStats&     stats      = result.sim;
     CpuSortStats& sort_stats = result.sort;
@@ -227,6 +229,10 @@ CpuPqSimStats Engine::run(PacketSource &source)
     }
 
     drain_until(std::numeric_limits<std::int64_t>::max());
+
+    sort_stats.total_sim_wall_us = std::chrono::duration<double, std::micro>(
+        std::chrono::steady_clock::now() - sim_wall_start).count();
+
     return result;
 }
 

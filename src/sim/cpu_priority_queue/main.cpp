@@ -46,9 +46,13 @@ int main(int argc, char **argv)
         sim::print_stats(result.sim);
 
         const auto &s = result.sort;
-        const double avg_us = s.sort_epochs ? s.total_sort_us / s.sort_epochs : 0.0;
-        std::cout << "sort_epochs="         << s.sort_epochs << '\n';
-        std::cout << "sort_latency_avg_us=" << avg_us        << '\n';
+        const double avg_us           = s.sort_epochs ? s.total_sort_us / s.sort_epochs : 0.0;
+        const double cpu_sort_util_pct = s.total_sim_wall_us > 0.0
+            ? s.total_sort_us / s.total_sim_wall_us * 100.0 : 0.0;
+        std::cout << "sort_epochs="          << s.sort_epochs         << '\n';
+        std::cout << "sort_latency_avg_us="  << avg_us                << '\n';
+        std::cout << "cpu_sort_util_pct="    << cpu_sort_util_pct     << '\n';
+        std::cout << "sim_wall_ms="          << s.total_sim_wall_us / 1000.0 << '\n';
         return 0;
     }
     catch (const std::exception &ex)

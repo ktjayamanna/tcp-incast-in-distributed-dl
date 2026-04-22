@@ -30,6 +30,9 @@ struct GpuSortStats
     // Epoch-level kernel timing (used as measured blind window).
     std::uint64_t sort_epochs           = 0;
     double        total_epoch_kernel_us = 0.0;
+
+    // Total simulation wall time (engine.run() duration).
+    double        total_sim_wall_ms     = 0.0;
 };
 
 struct GpuSimStats

@@ -33,6 +33,8 @@ Engine::Engine(SimConfig config)
 
 GpuSimStats Engine::run(PacketSource &source)
 {
+    const auto sim_wall_start = std::chrono::steady_clock::now();
+
     GpuSimStats   result{};
     SimStats     &stats      = result.sim;
     GpuSortStats &gpu_stats  = result.gpu;
@@ -197,6 +199,10 @@ GpuSimStats Engine::run(PacketSource &source)
     }
 
     drain_until(std::numeric_limits<std::int64_t>::max());
+
+    gpu_stats.total_sim_wall_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - sim_wall_start).count();
+
     return result;
 }
 

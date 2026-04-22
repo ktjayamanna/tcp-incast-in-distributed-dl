@@ -20,6 +20,7 @@ struct CpuSortStats
 {
     std::uint64_t sort_epochs           = 0;
     double        total_sort_us         = 0.0;  // sum of measured std::sort durations
+    double        total_sim_wall_us     = 0.0;  // total engine.run() duration
 };
 
 struct CpuPqSimStats

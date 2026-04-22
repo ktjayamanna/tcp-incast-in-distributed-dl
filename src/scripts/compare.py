@@ -50,14 +50,21 @@ def parse_stats(stdout):
         return float(m.group(1)) if m else 0.0
 
     return {
-        'arrived':             _int(r'^arrived=(\d+)'),
-        'ctrl_arrived':        _int(r'^control: arrived=(\d+)'),
-        'ctrl_dropped':        _int(r'^control:.*\bdropped=(\d+)'),
-        'ctrl_drop_pct':       _float(r'^control:.*\(([0-9.]+)%\)'),
-        'bulk_arrived':        _int(r'^bulk:\s+arrived=(\d+)'),
-        'bulk_dropped':        _int(r'^bulk:.*\bdropped=(\d+)'),
-        'bulk_drop_pct':       _float(r'^bulk:.*\(([0-9.]+)%\)'),
-        'sort_latency_avg_us': _float(r'^sort_latency_avg_us=([0-9.]+)'),
+        'arrived':              _int(r'^arrived=(\d+)'),
+        'ctrl_arrived':         _int(r'^control: arrived=(\d+)'),
+        'ctrl_dropped':         _int(r'^control:.*\bdropped=(\d+)'),
+        'ctrl_drop_pct':        _float(r'^control:.*\(([0-9.]+)%\)'),
+        'bulk_arrived':         _int(r'^bulk:\s+arrived=(\d+)'),
+        'bulk_dropped':         _int(r'^bulk:.*\bdropped=(\d+)'),
+        'bulk_drop_pct':        _float(r'^bulk:.*\(([0-9.]+)%\)'),
+        'sort_latency_avg_us':  _float(r'^sort_latency_avg_us=([0-9.]+)'),
+        'cpu_sort_util_pct':    _float(r'^cpu_sort_util_pct=([0-9.]+)'),
+        'sim_wall_ms':          _float(r'^sim_wall_ms=([0-9.]+)'),
+        # GPU-only fields (zero for CPU PQ)
+        'pipeline_efficiency':  _float(r'^pipeline_efficiency=([0-9.]+)'),
+        'gpu_kernel_util_pct':  _float(r'^gpu_kernel_util_pct=([0-9.]+)'),
+        'gpu_sort_active_pct':  _float(r'^gpu_sort_active_pct=([0-9.]+)'),
+        'gpu_vs_cpu_speedup':   _float(r'^gpu_vs_cpu_speedup=([0-9.]+)'),
     }
 
 
@@ -165,6 +172,16 @@ def main():
     print()
 
     print(f'  Wall time — CPU PQ: {results[0][2]:.1f}s   GPU PQ: {results[1][2]:.1f}s')
+    print()
+
+    print('  Sorter utilization')
+    print(f'  CPU PQ  sort occupies {cpu_stats["cpu_sort_util_pct"]:.1f}% of sim wall time  '
+          f'(std::sort, ~{cpu_lat:.0f}µs blind window per epoch)')
+    print(f'  GPU PQ  GPU active    {gpu_stats["gpu_sort_active_pct"]:.1f}% of sim wall time  '
+          f'| kernel compute {gpu_stats["gpu_kernel_util_pct"]:.1f}% of GPU active time')
+    print(f'          pipeline efficiency {gpu_stats["pipeline_efficiency"]:.2f}x  '
+          f'(>1.0 = H2D/kernel/D2H stages overlapping across 3 slots)')
+    print(f'          GPU sort {gpu_stats["gpu_vs_cpu_speedup"]:.1f}x faster than equivalent CPU std::sort')
     print()
 
 
