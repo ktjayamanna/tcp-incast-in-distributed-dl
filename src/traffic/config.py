@@ -94,12 +94,13 @@ SCENARIOS = {
 }
 
 # Simulation buffer size per scenario (bytes).
-# Sized to hold one full wave without drops so the GPU sees maximum batch sizes.
+# Sized so each wave overflows the buffer ~2-3× to produce meaningful drop rates.
+# Burst volume per wave: test=2.2MB, low=192KB, medium=14.6MB, high=43.9MB.
 SCENARIO_BUFFER_BYTES = {
-    ScenarioName.TEST:   1_048_576,     #  1 MB — tight buffer forces drops quickly
-    ScenarioName.LOW:    52_428_800,    # 50 MB — consistent across all scenarios
-    ScenarioName.MEDIUM: 52_428_800,
-    ScenarioName.HIGH:   52_428_800,
+    ScenarioName.TEST:   1_048_576,     #  1 MB — 2.2× burst → ~49% drops
+    ScenarioName.LOW:      131_072,     # 128 KB — 1.5× burst → ~30% drops
+    ScenarioName.MEDIUM: 5_242_880,     #  5 MB — 2.9× burst → ~50% drops
+    ScenarioName.HIGH:  16_777_216,     # 16 MB — 2.7× burst → ~48% drops
 }
 
 

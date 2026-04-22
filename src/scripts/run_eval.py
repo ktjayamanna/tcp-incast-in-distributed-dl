@@ -31,10 +31,10 @@ BASE_PORT        = 9100  # well away from default 9000
 # test uses 1 MB so the buffer fills quickly and forces drops.
 # All others use 50 MB.
 BUFFER_BY_SCENARIO = {
-    'test':   '1048576',
-    'low':    '52428800',
-    'medium': '52428800',
-    'high':   '52428800',
+    'test':   '1048576',    #  1 MB
+    'low':    '131072',     # 128 KB
+    'medium': '5242880',    #  5 MB
+    'high':   '16777216',   # 16 MB
 }
 
 ENGINES = [

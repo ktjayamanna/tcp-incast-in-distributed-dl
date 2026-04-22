@@ -201,18 +201,30 @@ CpuPqSimStats Engine::run(PacketSource &source)
             auto it = std::find_if(pending.begin(), pending.end(),
                 [s = evict_candidate_seq](const PendingEntry &e){ return e.sequence == s; });
 
-            queued_bytes -= it->packet.packet_size_bytes;
-            stats.dropped_packets                      += 1;
-            stats.dropped_bytes                        += it->packet.packet_size_bytes;
-            auto &ec = class_counters(stats, it->packet.traffic_class);
-            ec.dropped_packets                         += 1;
-            ec.dropped_bytes                           += it->packet.packet_size_bytes;
-            pending.erase(it);
-            epoch_sorted = false;
-            evict_candidate_seq = std::numeric_limits<std::uint32_t>::max();
+            if (it == pending.end())
+            {
+                // Candidate was already drained — invalidate and drop this control packet.
+                evict_candidate_seq = std::numeric_limits<std::uint32_t>::max();
+                stats.dropped_packets += 1;
+                stats.dropped_bytes   += pkt.packet_size_bytes;
+                cc.dropped_packets    += 1;
+                cc.dropped_bytes      += pkt.packet_size_bytes;
+            }
+            else
+            {
+                queued_bytes -= it->packet.packet_size_bytes;
+                stats.dropped_packets                      += 1;
+                stats.dropped_bytes                        += it->packet.packet_size_bytes;
+                auto &ec = class_counters(stats, it->packet.traffic_class);
+                ec.dropped_packets                         += 1;
+                ec.dropped_bytes                           += it->packet.packet_size_bytes;
+                pending.erase(it);
+                epoch_sorted = false;
+                evict_candidate_seq = std::numeric_limits<std::uint32_t>::max();
 
-            queued_bytes += pkt.packet_size_bytes;
-            pending.push_back({std::move(pkt), sequence++});
+                queued_bytes += pkt.packet_size_bytes;
+                pending.push_back({std::move(pkt), sequence++});
+            }
         }
         else if (buffer_full)
         {
@@ -224,7 +236,15 @@ CpuPqSimStats Engine::run(PacketSource &source)
         else
         {
             queued_bytes += pkt.packet_size_bytes;
-            pending.push_back({std::move(pkt), sequence++});
+            const std::uint32_t seq = sequence++;
+            pending.push_back({std::move(pkt), seq});
+            // Track the most recently admitted bulk packet as eviction candidate.
+            // All bulk packets share the same priority tag (DSCP 0), so the
+            // highest sequence = worst priority = correct tail-drop target.
+            // This gives O(1) candidate tracking between epoch sorts, enabling
+            // the swap logic to fire as soon as the blind window expires.
+            if (pending.back().packet.traffic_class == TrafficClass::Bulk)
+                evict_candidate_seq = seq;
         }
     }
 
