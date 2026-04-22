@@ -57,10 +57,10 @@ def low() -> TrafficConfig:
 
 
 def medium() -> TrafficConfig:
-    """5 000 senders — rack aggregation. GPU approaches CPU sort performance."""
+    """5 000 senders × 3 waves — rack aggregation. GPU approaches CPU sort performance."""
     return TrafficConfig(
         senders_per_wave=5_000,
-        number_of_waves=10,
+        number_of_waves=3,
         first_wave_start_us=0,
         wave_interval_us=5_000,
         max_start_offset_us=20,
@@ -75,7 +75,7 @@ def high() -> TrafficConfig:
     """10 000 senders — core / datacenter switch. GPU wins decisively."""
     return TrafficConfig(
         senders_per_wave=10_000,
-        number_of_waves=10,
+        number_of_waves=3,
         first_wave_start_us=0,
         wave_interval_us=9_000,
         max_start_offset_us=20,

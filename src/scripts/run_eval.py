@@ -621,9 +621,9 @@ def main() -> None:
     total_runs = len(SCENARIOS) * len(ENGINES)
     run_n = 0
 
-    for sc in SCENARIOS:
+    for si, sc in enumerate(SCENARIOS):
         for i, (label, binary, extra_args) in enumerate(ENGINES):
-            port = BASE_PORT + i
+            port = BASE_PORT + si * len(ENGINES) + i
             run_n += 1
             print(f'[{run_n}/{total_runs}] {label:12s}  scenario={sc} ...', end=' ', flush=True)
             stdout, rc, elapsed = run_engine(binary, extra_args, sc, port,
