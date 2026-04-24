@@ -6,26 +6,23 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include <chrono>
+#include <cstring>
 #include <iostream>
-#include <sstream>
 #include <stdexcept>
-#include <string>
+#include <vector>
 
 namespace sim::cpu_fifo
 {
 
-namespace
-{
+// Wire format (little-endian):
+//   [8B ts_us uint64] [2B ip_len uint16] [ip_len bytes: raw IP packet]
+// DSCP is read from IP header byte 1 (ToS field, bits 7-2).
+// DSCP 46 = control (Expedited Forwarding), all others = bulk.
 
-std::int64_t now_us()
-{
-    return std::chrono::duration_cast<std::chrono::microseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
-
-} // namespace
+static constexpr std::uint8_t  _CTRL_DSCP   = 46;
+static constexpr std::size_t   _FRAME_HDR   = 10;  // 8B ts + 2B len
+static constexpr std::size_t   _IP_TOS_OFF  =  1;  // ToS byte in IP header
+static constexpr std::size_t   _IP_TOT_OFF  =  2;  // total-length field
 
 SocketPacketSource::SocketPacketSource(std::uint16_t port)
     : server_fd_(-1), conn_fd_(-1)
@@ -39,9 +36,9 @@ SocketPacketSource::SocketPacketSource(std::uint16_t port)
     ::setsockopt(server_fd_, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
 
     sockaddr_in addr{};
-    addr.sin_family = AF_INET;
+    addr.sin_family      = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(port);
+    addr.sin_port        = htons(port);
 
     if (::bind(server_fd_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
         throw std::runtime_error("bind() failed on port " + std::to_string(port));
@@ -58,74 +55,62 @@ SocketPacketSource::SocketPacketSource(std::uint16_t port)
 
 SocketPacketSource::~SocketPacketSource()
 {
-    if (conn_fd_ >= 0)
-        ::close(conn_fd_);
-    if (server_fd_ >= 0)
-        ::close(server_fd_);
+    if (conn_fd_ >= 0) ::close(conn_fd_);
+    if (server_fd_ >= 0) ::close(server_fd_);
 }
 
-bool SocketPacketSource::ensure_line() const
+bool SocketPacketSource::recv_exact(void* buf, std::size_t n) const
 {
-    while (recv_buf_.find('\n') == std::string::npos)
+    auto* p = static_cast<char*>(buf);
+    while (n > 0)
     {
-        if (done_)
-            return false;
-        char tmp[4096];
-        ssize_t n = ::recv(conn_fd_, tmp, sizeof(tmp), 0);
-        if (n <= 0)
-        {
-            done_ = true;
-            return false;
-        }
-        recv_buf_.append(tmp, static_cast<std::size_t>(n));
+        ssize_t got = ::recv(conn_fd_, p, n, 0);
+        if (got <= 0) { done_ = true; return false; }
+        p += got;
+        n -= static_cast<std::size_t>(got);
     }
     return true;
 }
 
 bool SocketPacketSource::has_next() const
 {
-    return ensure_line();
+    if (done_)    return false;
+    if (has_hdr_) return true;
+    // Block until we can read a full frame header; EOF here means stream is done.
+    if (!recv_exact(hdr_buf_, _FRAME_HDR)) return false;
+    has_hdr_ = true;
+    return true;
 }
 
 Packet SocketPacketSource::next()
 {
-    if (!ensure_line())
+    if (!has_next())
         throw std::runtime_error("next() called with no data available");
 
-    const auto nl = recv_buf_.find('\n');
-    std::string line = recv_buf_.substr(0, nl);
-    recv_buf_.erase(0, nl + 1);
+    std::uint64_t ts_us;
+    std::uint16_t ip_len;
+    std::memcpy(&ts_us,  hdr_buf_,     sizeof(ts_us));
+    std::memcpy(&ip_len, hdr_buf_ + 8, sizeof(ip_len));
+    has_hdr_ = false;
 
-    // wire format: <size_bytes>,<traffic_class>,<priority_tag>
-    std::istringstream ss(line);
-    std::string tok;
+    // Read raw IP packet
+    std::vector<std::uint8_t> ip(ip_len);
+    if (!recv_exact(ip.data(), ip_len))
+        throw std::runtime_error("truncated IP packet in stream");
 
-    if (!std::getline(ss, tok, ','))
-        throw std::runtime_error("malformed packet line: missing size_bytes");
-    const auto size_bytes = static_cast<std::uint32_t>(std::stoul(tok));
-
-    if (!std::getline(ss, tok, ','))
-        throw std::runtime_error("malformed packet line: missing traffic_class");
-    const TrafficClass tc = (tok == "control") ? TrafficClass::Control : TrafficClass::Bulk;
-
-    if (!std::getline(ss, tok, ','))
-        throw std::runtime_error("malformed packet line: missing priority_tag");
-    const auto priority_tag = static_cast<std::uint8_t>(std::stoul(tok));
-
-    // Optional 4th field: ns3 simulation timestamp in microseconds.
-    // When present, use it as arrival_time_us so the engine operates on
-    // simulation time rather than wall-clock time.  This is required for
-    // correct burst semantics: ns3 captures traffic pre-bottleneck at
-    // simulation timescale; wall-clock replay timing is too coarse.
-    std::int64_t arrival_us = now_us();
-    if (std::getline(ss, tok) && !tok.empty())
-        arrival_us = static_cast<std::int64_t>(std::stoull(tok));
+    // Parse IP header fields directly — same as a real queue would
+    const std::uint8_t  dscp         = ip[_IP_TOS_OFF] >> 2;
+    const std::uint16_t ip_total     = static_cast<std::uint16_t>(
+                                           (ip[_IP_TOT_OFF] << 8) | ip[_IP_TOT_OFF + 1]);
+    const TrafficClass  tc           = (dscp == _CTRL_DSCP)
+                                           ? TrafficClass::Control
+                                           : TrafficClass::Bulk;
 
     Packet pkt;
-    pkt.arrival_time_us    = arrival_us;
-    pkt.packet_size_bytes  = size_bytes;
-    pkt.traffic_class      = tc;
-    pkt.priority_tag       = priority_tag;
+    pkt.arrival_time_us   = static_cast<std::int64_t>(ts_us);
+    pkt.packet_size_bytes = ip_total;
+    pkt.traffic_class     = tc;
+    pkt.priority_tag      = dscp;
     return pkt;
 }
 

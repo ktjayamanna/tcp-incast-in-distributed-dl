@@ -3,7 +3,7 @@
 #include "packet_source.hpp"
 
 #include <cstdint>
-#include <string>
+#include <vector>
 
 namespace sim::cpu_fifo
 {
@@ -18,12 +18,13 @@ public:
     Packet next() override;
 
 private:
-    int server_fd_;
-    int conn_fd_;
-    mutable std::string recv_buf_;
-    mutable bool done_ = false;
+    int  server_fd_;
+    int  conn_fd_;
+    mutable bool     done_    = false;
+    mutable bool     has_hdr_ = false;
+    mutable std::uint8_t hdr_buf_[10]{};  // buffered frame header (ts + len)
 
-    bool ensure_line() const;
+    bool recv_exact(void* buf, std::size_t n) const;
 };
 
 } // namespace sim::cpu_fifo

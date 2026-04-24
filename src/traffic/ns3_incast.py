@@ -83,8 +83,8 @@ _IP_TOT_OFF = 2    # byte offset of total-length field inside IP header
 _TCP_DATA_OFF = 32  # minimum IP+TCP header (20+20) — used as floor for payload check
 
 
-def _iter_pcap_tcp_data(path: str) -> Iterator[tuple[int, int, str]]:
-    """Yield (ts_us, ip_total_bytes, src_ip_str) for each TCP data packet in a PCAP."""
+def _iter_pcap_tcp_data(path: str) -> Iterator[tuple[int, bytes]]:
+    """Yield (ts_us, ip_packet_bytes) for each TCP data packet in a PCAP."""
     with open(path, "rb") as f:
         magic = struct.unpack_from("<I", f.read(4))[0]
         if magic == 0xA1B2C3D4:
@@ -124,10 +124,7 @@ def _iter_pcap_tcp_data(path: str) -> Iterator[tuple[int, int, str]]:
             if protocol != 6:
                 continue  # not TCP
 
-            src_bytes = ip[_IP_SRC_OFF:_IP_SRC_OFF + 4]
-            src_ip = "{}.{}.{}.{}".format(*src_bytes)
-
-            yield ts_us, ip_total, src_ip
+            yield ts_us, bytes(ip[:ip_total])
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +134,8 @@ def _iter_pcap_tcp_data(path: str) -> Iterator[tuple[int, int, str]]:
 def _simulate(
     config: TrafficConfig,
     link_bps: int,
-) -> tuple[list[tuple[int, int, str]], set[str]]:
-    """Build and run the incast topology, return collected packets and control IPs."""
+) -> list[tuple[int, bytes]]:
+    """Build and run the incast topology, return (ts_us, raw_ip_bytes) per packet."""
     ns = _load_ns3()
 
     n = config.senders_per_wave
@@ -214,7 +211,6 @@ def _simulate(
     rcvr_addr = ns.InetSocketAddress(rcvr_ip, 9).ConvertTo()
 
     control_sender_ids = set(range(0, n, config.control_packet_every_n))
-    control_ips = {sender_ips[i] for i in control_sender_ids}
 
     for w in range(config.number_of_waves):
         wave_base_us = config.first_wave_start_us + w * config.wave_interval_us
@@ -252,20 +248,35 @@ def _simulate(
     # access.EnablePcap also captures the aggregator's bottleneck-facing device
     # (device index n+1, post-DropTailQueue) — exclude it to avoid duplicates.
     # Access link devices are 1..n on aggregator node n; bottleneck is n+1.
-    sender_ips_set = set(sender_ips.values())
+    # Build IP lookup sets as 4-byte tuples for fast PCAP filtering and DSCP stamping
+    ctrl_tos = config.control_priority_tag << 2  # DSCP 46 → ToS 0xb8
+    sender_ip_set = {
+        tuple(int(x) for x in ip.split('.'))
+        for ip in sender_ips.values()
+    }
+    ctrl_ip_set = {
+        tuple(int(x) for x in sender_ips[i].split('.'))
+        for i in control_sender_ids
+    }
+
     agg_node_id = n
     bottleneck_pcap = os.path.join(tmpdir, f"burst-{agg_node_id}-{n + 1}.pcap")
-    pre_queue: list[tuple[int, int, str]] = []
+    pre_queue: list[tuple[int, bytes]] = []
     for pcap in globmod.glob(os.path.join(tmpdir, "burst-*.pcap")):
         if os.path.abspath(pcap) == os.path.abspath(bottleneck_pcap):
             continue  # post-bottleneck — skip to avoid counting packets twice
-        for ts_us, ip_total, src_ip in _iter_pcap_tcp_data(pcap):
-            if src_ip in sender_ips_set:
-                pre_queue.append((ts_us, ip_total, src_ip))
+        for ts_us, ip_bytes in _iter_pcap_tcp_data(pcap):
+            src = tuple(ip_bytes[_IP_SRC_OFF:_IP_SRC_OFF + 4])
+            if src not in sender_ip_set:
+                continue  # skip ACKs from receiver flowing back through access links
+            # Stamp DSCP into ToS byte so the C++ engine classifies from the IP header
+            ip_mut = bytearray(ip_bytes)
+            ip_mut[1] = ctrl_tos if src in ctrl_ip_set else 0
+            pre_queue.append((ts_us, bytes(ip_mut)))
 
     pre_queue.sort()
     print(f"Simulation done: {len(pre_queue)} TCP data packets captured (pre-bottleneck).")
-    return pre_queue, control_ips
+    return pre_queue
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +290,7 @@ def send(
     link_bps: int = 40_000_000_000,
 ) -> None:
     config = get_scenario(scenario)
-    packets, control_ips = _simulate(config, link_bps)
+    packets = _simulate(config, link_bps)
 
     if not packets:
         print("No packets captured — nothing to send.")
@@ -288,16 +299,10 @@ def send(
     with socket.create_connection((host, port)) as conn:
         print(f"Connected to {host}:{port} — replaying {len(packets)} packets")
 
-        for ts_us, ip_total, src_ip in packets:
-            if src_ip in control_ips:
-                tc, tag = "control", config.control_priority_tag
-            else:
-                tc, tag = "bulk", config.bulk_priority_tag
-
-            # ts_us is the ns3 simulation timestamp; the engine uses it as
-            # arrival_time_us so simulation operates on ns3 timescale, not
-            # wall-clock time.  No sleep needed — correctness is driven by ts_us.
-            conn.sendall(f"{ip_total},{tc},{tag},{ts_us}\n".encode())
+        for ts_us, ip_bytes in packets:
+            # Binary frame: [8B ts_us uint64 LE] [2B packet_len uint16 LE] [raw IP bytes]
+            # Engine reads IP header directly to extract DSCP, size, etc.
+            conn.sendall(struct.pack("<QH", ts_us, len(ip_bytes)) + ip_bytes)
 
     print("All packets sent.")
 
