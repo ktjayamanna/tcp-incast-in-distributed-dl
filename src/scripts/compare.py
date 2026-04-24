@@ -13,7 +13,8 @@ import sys
 import time
 
 
-def run_engine_with_ns3(binary, engine_args, scenario, port, link_bps, buffer_bytes, timeout=300):
+def run_engine_with_ns3(binary, engine_args, scenario, port, link_bps, buffer_bytes,
+                        timeout=300):
     """Start engine in socket mode, send ns3 traffic, return stdout."""
     engine_cmd = [binary] + engine_args + ['--socket', str(port)]
     ns3_cmd = [
@@ -21,7 +22,6 @@ def run_engine_with_ns3(binary, engine_args, scenario, port, link_bps, buffer_by
         '--scenario', scenario,
         '--port', str(port),
         '--link-bps', str(link_bps),
-        '--buffer-bytes', str(buffer_bytes),
     ]
 
     env = {**os.environ, 'PYTHONPATH': '.'}

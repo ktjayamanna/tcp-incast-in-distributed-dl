@@ -137,7 +137,6 @@ def _iter_pcap_tcp_data(path: str) -> Iterator[tuple[int, int, str]]:
 def _simulate(
     config: TrafficConfig,
     link_bps: int,
-    buffer_bytes: int,
 ) -> tuple[list[tuple[int, int, str]], set[str]]:
     """Build and run the incast topology, return collected packets and control IPs."""
     ns = _load_ns3()
@@ -176,10 +175,11 @@ def _simulate(
     bottle = ns.PointToPointHelper()
     bottle.SetDeviceAttribute("DataRate", ns.StringValue(f"{link_bps}bps"))
     bottle.SetChannelAttribute("Delay", ns.StringValue("1us"))
+    # Buffer is intentionally unbounded here — drop policy is the C++ engine's job.
     bottle.SetQueue(
         "ns3::DropTailQueue",
         "MaxSize",
-        ns.StringValue(f"{buffer_bytes}B"),
+        ns.StringValue("10000000000000B"),
     )
 
     bottle_nc = ns.NodeContainer()
@@ -277,10 +277,9 @@ def send(
     host: str,
     port: int,
     link_bps: int = 40_000_000_000,
-    buffer_bytes: int = 52_428_800,
 ) -> None:
     config = get_scenario(scenario)
-    packets, control_ips = _simulate(config, link_bps, buffer_bytes)
+    packets, control_ips = _simulate(config, link_bps)
 
     if not packets:
         print("No packets captured — nothing to send.")
@@ -325,19 +324,12 @@ def main() -> None:
         default=40_000_000_000,
         help="Bottleneck link speed in bps (default: 40 Gbps)",
     )
-    parser.add_argument(
-        "--buffer-bytes",
-        type=int,
-        default=52_428_800,
-        help="Bottleneck queue buffer in bytes (default: 50 MB)",
-    )
     args = parser.parse_args()
     send(
         ScenarioName(args.scenario),
         args.host,
         args.port,
         args.link_bps,
-        args.buffer_bytes,
     )
 
 
