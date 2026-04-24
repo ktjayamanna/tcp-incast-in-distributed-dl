@@ -1,5 +1,5 @@
 {
-    "name": "smartconvert",
+    "name": "AQM",
     "build": {
         "dockerfile": "../Dockerfile",
         "context": ".."
@@ -28,7 +28,6 @@
                 "ms-python.python",
                 "ms-python.black-formatter",
                 "ms-toolsai.jupyter",
-                "augment.vscode-augment",
                 "ms-vscode.cpptools",
                 "ms-vscode.cmake-tools",
                 "nvidia.nsight-vscode-edition",
